@@ -1,0 +1,13 @@
+CUDA_VISIBLE_DEVICES=2 python main.py \
+  mode=ppl_eval \
+  loader.batch_size=32 \
+  loader.eval_batch_size=32 \
+  data=openwebtext-split \
+  parameterization=subs \
+  backbone=dit \
+  model.length=1024 \
+  eval.checkpoint_path=/home/shibaev/diff/mdlm/checkpoints/ft_small/checkpoints/0-500.ckpt \
+  text_embedder.use_text_embedder=True \
+  text_embedder.model_name=sentence-transformers/all-MiniLM-L6-v2 \
+  wandb.name=eval_raw_with_conditioning_$(date +%Y%m%d_%H%M%S) \
+  +wandb.offline=true 

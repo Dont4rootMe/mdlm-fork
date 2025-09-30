@@ -1,0 +1,16 @@
+CUDA_VISIBLE_DEVICES=3 python main.py \
+  mode=condition_dependence_test \
+  loader.eval_batch_size=16 \
+  sampling.num_sample_batches=5 \
+  data.wrap=False \
+  data=openwebtext-split \
+  parameterization=subs \
+  backbone=dit \
+  model.length=1024 \
+  model.cond_dim_embedding=512 \
+  eval.checkpoint_path=/home/shibaev/diff/mdlm/checkpoints/ft_small_unit addcond_no_wrap_saved/0-30000.ckpt \
+  text_embedder.use_text_embedder=False \
+  sampling.steps=500 \
+  text_embedder.model_name=sentence-transformers/all-MiniLM-L6-v2 \
+  +embedding_cache_dir=/home/shibaev/diff/mdlm/embedding_cache \
+  eval.disable_ema=False 

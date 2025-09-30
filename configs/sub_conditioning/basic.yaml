@@ -1,0 +1,6 @@
+# @package sub_conditioning
+# Sub conditioning configuration preset - basic residual modulation only
+
+enabled: true
+use_residual_modulation: true
+use_weighted_sum: false

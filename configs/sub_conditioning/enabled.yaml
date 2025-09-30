@@ -1,0 +1,6 @@
+# @package sub_conditioning
+# Sub conditioning configuration preset - enabled with full features
+
+enabled: true
+use_residual_modulation: true
+use_weighted_sum: true

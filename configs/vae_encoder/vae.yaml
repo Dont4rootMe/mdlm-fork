@@ -1,0 +1,52 @@
+enabled: false
+
+latent_encoder:
+  checkpoint: /mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/vae_encoder.pth
+
+  attention:
+    head_size: 64
+    num_heads: 12
+    probs_dropout: 0.0
+    qk_norm: true
+    implementation: flash_attention_2
+    
+  embedding:
+    dim: 768
+    max_position_embeddings: 128
+    initializer_range: 0.02
+
+  hidden:
+    size: 768
+    dropout: 0.1
+    num_layers: 12
+    ff_mult: 4
+
+  latent:
+    dim: 768
+    num_latents: 1
+
+  normalization:
+    layer_eps: 1.0e-05
+
+  model:
+    text_encoder: bert-base-cased
+    text_encoder_freeze_params: true
+    mlm_probability: 0.3
+    bert_masking: true
+
+  tokens:
+    vocab_size: null
+
+  augmentation:
+    masking:
+      encodings_mlm_probability: 0.3
+      weight: 0.5
+
+    gaussian_noise:
+      delta: 0.7
+      weight: 0.5
+
+    latent_masking:
+      probability: 0.4
+      vae_beta: 0.0001
+      vae_sigma: 1.0

@@ -1,0 +1,14 @@
+CUDA_VISIBLE_DEVICES=0 python main.py \
+  model=small \
+  data=openwebtext-split \
+  wandb.name=fine_tuning-small-no-cond_$(date +%Y%m%d_%H%M%S) \
+  parameterization=subs \
+  model.length=1024 \
+  eval.compute_generative_perplexity=True \
+  sampling.steps=1000 \
+  checkpointing.resume_from_ckpt=True \
+  checkpointing.resume_ckpt_path=/home/shibaev/diff/mdlm/checkpoints/raw_small/model.safetensors \
+  checkpointing.save_dir=/home/shibaev/diff/mdlm/checkpoints/ft_small_no_cond/ \
+  loader.global_batch_size=128 \
+  loader.batch_size=32 \
+  loader.eval_batch_size=32 

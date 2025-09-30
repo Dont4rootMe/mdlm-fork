@@ -1,0 +1,6 @@
+# @package sub_conditioning
+# Sub conditioning configuration preset - disabled (baseline)
+
+enabled: false
+use_residual_modulation: false
+use_weighted_sum: false

@@ -1,0 +1,7 @@
+# Configuration for JSON logging
+use_json_logger: true  # Default behavior
+use_wandb_logger: false  # Set to true to use wandb instead
+
+# Optional: additional JSON logger settings could be added here
+# plot_update_interval: 10  # Update plots every N steps
+# save_plots_every: 100     # Save intermediate plots every N steps

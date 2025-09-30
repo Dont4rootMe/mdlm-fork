@@ -1,0 +1,9 @@
+CUDA_VISIBLE_DEVICES=0 python main.py \
+  mode=ppl_eval \
+  loader.batch_size=16 \
+  loader.eval_batch_size=16 \
+  data=openwebtext-split \
+  parameterization=subs \
+  backbone=hf_dit \
+  model.length=1024 \
+  eval.checkpoint_path=kuleshov-group/mdlm-owt \
