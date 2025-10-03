@@ -625,6 +625,67 @@ class Diffusion(L.LightningModule):
                   sync_dist=True)
     return loss
 
+  @torch.no_grad()
+  def _compute_first_step_metrics(self, x0):
+    """Compute first step denoising accuracy and Levenshtein distance metrics."""
+    if self.parameterization == 'ar':
+      return  # Skip for autoregressive models
+    
+    # Sample a high noise level (close to 1.0) for first step
+    batch_size = x0.shape[0]
+    t = torch.ones(batch_size, device=x0.device) * 0.99  # High noise level
+    
+    # Get condition embeddings
+    condition = None
+    if self.config.text_embedder.use_text_embedder and self.text_embedder is not None:
+      condition = self.indices_to_text_embeddings(x0)
+    
+    # Create noisy version (mostly masked)
+    sigma, _ = self.noise(t)
+    unet_conditioning = sigma[:, None]
+    move_chance = 1 - torch.exp(-sigma[:, None])
+    xt = self.q_xt(x0, move_chance)
+    
+    # Get current embeddings for sub conditioning
+    curr_embed = None
+    if True:  # Same condition as in _sample method
+      curr_embed = self.indices_to_text_embeddings(xt)
+    
+    # Predict x0 from xt
+    with torch.cuda.amp.autocast(dtype=torch.float32):
+      logits = self.backbone(xt, unet_conditioning, condition, curr_embed=curr_embed)
+    
+    # Get predicted tokens (argmax)
+    if self.parameterization == 'subs':
+      # For subs parameterization, apply the same processing as in forward
+      logits[:, :, self.mask_index] += self.neg_infinity
+      logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
+      unmasked_indices = (xt != self.mask_index)
+      logits[unmasked_indices] = self.neg_infinity
+      logits[unmasked_indices, xt[unmasked_indices]] = 0
+    elif self.parameterization == 'd3pm':
+      if self.subs_masking:
+        logits[:, :, self.mask_index] += self.neg_infinity
+      logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
+    
+    predicted_tokens = logits.argmax(dim=-1)
+    
+    # Compute metrics
+    accuracy, levenshtein = _compute_first_step_accuracy_and_levenshtein(
+      self.tokenizer, predicted_tokens, x0)
+    
+    # Update metrics
+    self.valid_first_step_metrics.update({
+      'first_step_accuracy': torch.tensor(accuracy, device=x0.device),
+      'first_step_levenshtein': torch.tensor(levenshtein, device=x0.device)
+    }, weight=torch.tensor(batch_size, device=x0.device))
+    
+    # Log metrics
+    self.log_dict(self.valid_first_step_metrics,
+                  on_step=False,
+                  on_epoch=True,
+                  sync_dist=True)
+
   def on_train_epoch_start(self):
     self.backbone.train()
     self.noise.train()
@@ -671,13 +732,28 @@ class Diffusion(L.LightningModule):
          and not self.parameterization == 'ar'):
       # TODO(justin): implement sampling and kv cache for AR
       samples, text_samples = None, None
+      all_first_step_accuracies = []
+      all_first_step_levenshteins = []
       for _ in range(
         self.config.sampling.num_sample_batches):
-        samples, _ = self._sample()
+        samples, _, first_step_acc, first_step_lev = self._sample()
+        # Collect first step metrics if available
+        if first_step_acc is not None:
+          all_first_step_accuracies.append(first_step_acc)
+        if first_step_lev is not None:
+          all_first_step_levenshteins.append(first_step_lev)
         # Decode the samples to be re-tokenized by eval model
         text_samples = self.tokenizer.batch_decode(samples)
         if self.config.eval.compute_generative_perplexity:
           self.compute_generative_perplexity(text_samples)
+      
+      # Log aggregated first step metrics
+      if all_first_step_accuracies:
+        avg_first_step_acc = sum(all_first_step_accuracies) / len(all_first_step_accuracies)
+        self.log('val/first_step_accuracy_sampling', avg_first_step_acc, on_epoch=True, on_step=False, sync_dist=True)
+      if all_first_step_levenshteins:
+        avg_first_step_lev = sum(all_first_step_levenshteins) / len(all_first_step_levenshteins)
+        self.log('val/first_step_levenshtein_sampling', avg_first_step_lev, on_epoch=True, on_step=False, sync_dist=True)
       if self.trainer.global_rank == 0 and hasattr(
         self.trainer.logger, 'log_table'):
         # Log the last generated samples
@@ -1380,6 +1456,10 @@ class Diffusion(L.LightningModule):
     # if True:
     #   curr_embed = self.indices_to_text_embeddings(x)
     
+    # Variables to store first step metrics
+    first_step_accuracy = None
+    first_step_levenshtein = None
+    
     for i in range(num_steps):
       t = timesteps[i] * torch.ones(
         x.shape[0], 1, device=self.device)
@@ -1389,6 +1469,36 @@ class Diffusion(L.LightningModule):
       # Update curr_embed for sub conditioning at each step
       if True:
         curr_embed = self.indices_to_text_embeddings(x)
+
+      # Compute first step metrics (only on first iteration and if we have reference texts)
+      if i == 0 and reference_texts is not None and any(ref is not None for ref in reference_texts):
+        # Get predictions for first step
+        sigma_t, _ = self.noise(t)
+        if sigma_t.ndim > 1:
+          sigma_t = sigma_t.squeeze(-1)
+        
+        with torch.no_grad():
+          log_p_x0 = self.forward(x, sigma_t, step_condition, curr_embed=curr_embed)
+          predicted_x0 = log_p_x0.argmax(dim=-1)
+          
+          # Convert reference texts to tokens for comparison
+          reference_token_lists = []
+          for ref_text in reference_texts:
+            if ref_text is not None:
+              ref_tokens = self.tokenizer.encode(ref_text)
+              # Pad or truncate to match sequence length
+              if len(ref_tokens) < x.shape[1]:
+                ref_tokens.extend([self.tokenizer.pad_token_id] * (x.shape[1] - len(ref_tokens)))
+              else:
+                ref_tokens = ref_tokens[:x.shape[1]]
+              reference_token_lists.append(ref_tokens)
+            else:
+              reference_token_lists.append([self.tokenizer.pad_token_id] * x.shape[1])
+          
+          if reference_token_lists:
+            reference_tokens = torch.tensor(reference_token_lists, device=x.device, dtype=torch.long)
+            first_step_accuracy, first_step_levenshtein = _compute_first_step_accuracy_and_levenshtein(
+              self.tokenizer, predicted_x0, reference_tokens)
 
       # Optionally update the condition embedding via EMA using a sampled x0
       if (i in update_steps) and (step_condition is not None):
@@ -1454,11 +1564,11 @@ class Diffusion(L.LightningModule):
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
       # Update global counter
       self._trajectories_saved = base_id + len(indices_to_save)
-    return x, reference_texts
+    return x, reference_texts, first_step_accuracy, first_step_levenshtein
 
   def restore_model_and_sample(self, num_steps, eps=1e-5):
     """Generate samples from the model.
-    Returns: (samples_tensor, reference_texts_list)
+    Returns: (samples_tensor, reference_texts_list, first_step_accuracy, first_step_levenshtein)
     """
     # Lightning auto-casting is not working in this method for some reason
     if self.ema:
@@ -1472,14 +1582,14 @@ class Diffusion(L.LightningModule):
     self.noise.eval()
     self.backbone.to(torch.float32)
     self.noise.to(torch.float32)
-    samples, reference_texts = self._sample(num_steps=num_steps, eps=eps)
+    samples, reference_texts, first_step_accuracy, first_step_levenshtein = self._sample(num_steps=num_steps, eps=eps)
     if self.ema:
       self.ema.restore(itertools.chain(
         self.backbone.parameters(),
         self.noise.parameters()))
     self.backbone.train()
     self.noise.train()
-    return samples, reference_texts
+    return samples, reference_texts, first_step_accuracy, first_step_levenshtein
 
   def get_score(self, x, sigma, condition=None):
     if self.config.sub_conditioning.enabled:

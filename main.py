@@ -328,6 +328,8 @@ def generate_samples(config, logger, tokenizer):
   num_strides = config.sampling.num_strides
   all_text_samples = []
   all_reference_texts = []
+  all_first_step_accuracies = []
+  all_first_step_levenshteins = []
   
   for _ in tqdm(range(config.sampling.num_sample_batches)):
     if config.sampling.semi_ar:
@@ -343,11 +345,16 @@ def generate_samples(config, logger, tokenizer):
       # and diffusion.compute_generative_perplexity() discards
       # any text after the first EOS token.
     else:
-      samples, reference_texts = model.restore_model_and_sample(
+      samples, reference_texts, first_step_acc, first_step_lev = model.restore_model_and_sample(
         num_steps=config.sampling.steps)
       text_samples = model.tokenizer.batch_decode(samples) #, skip_special_tokens=True)
       all_text_samples.extend(text_samples)
       all_reference_texts.extend(reference_texts)
+      # Collect first step metrics if available
+      if first_step_acc is not None:
+        all_first_step_accuracies.append(first_step_acc)
+      if first_step_lev is not None:
+        all_first_step_levenshteins.append(first_step_lev)
       model.compute_generative_perplexity(text_samples)
   
   # compute accuracy and Levenshtein distance
@@ -440,8 +447,18 @@ def generate_samples(config, logger, tokenizer):
   print(f'Mean token accuracy: {accuracy * 100:.4f}%')
   print(f'Mean normalized Levenshtein distance: {levenshtein_distance:.4f}')
   
-  # return 5 metrics: mauve, diversity, perplexity, accuracy, levenshtein_distance
-  return mauve_score, diversity_metrics['diversity'], gen_ppl, accuracy, levenshtein_distance
+  # Compute and print first step metrics
+  first_step_accuracy = None
+  first_step_levenshtein = None
+  if all_first_step_accuracies:
+    first_step_accuracy = sum(all_first_step_accuracies) / len(all_first_step_accuracies)
+    print(f'First step accuracy: {first_step_accuracy * 100:.4f}%')
+  if all_first_step_levenshteins:
+    first_step_levenshtein = sum(all_first_step_levenshteins) / len(all_first_step_levenshteins)
+    print(f'First step normalized Levenshtein distance: {first_step_levenshtein:.4f}')
+  
+  # return 7 metrics: mauve, diversity, perplexity, accuracy, levenshtein_distance, first_step_accuracy, first_step_levenshtein
+  return mauve_score, diversity_metrics['diversity'], gen_ppl, accuracy, levenshtein_distance, first_step_accuracy, first_step_levenshtein
 
 def test_condition_embedding_dependence(config, logger, tokenizer, num_test_batches=5, std_dev=1.0):
   """
@@ -612,12 +629,16 @@ def main(config):
   tokenizer = dataloader.get_tokenizer(config)
 
   if config.mode == 'sample_eval':
-    mauve_score, diversity, gen_ppl, accuracy, levenshtein_distance = generate_samples(config, logger, tokenizer)
+    mauve_score, diversity, gen_ppl, accuracy, levenshtein_distance, first_step_accuracy, first_step_levenshtein = generate_samples(config, logger, tokenizer)
     logger.info(f"MAUVE score: {mauve_score * 100:.4f}")
     logger.info(f"Diversity: {diversity * 100:.4f}")
     logger.info(f"Generative perplexity: {gen_ppl:.2f}")
     logger.info(f"Mean token accuracy: {accuracy * 100:.4f}%")
     logger.info(f"Mean normalized Levenshtein distance: {levenshtein_distance:.4f}")
+    if first_step_accuracy is not None:
+      logger.info(f"First step accuracy: {first_step_accuracy * 100:.4f}%")
+    if first_step_levenshtein is not None:
+      logger.info(f"First step normalized Levenshtein distance: {first_step_levenshtein:.4f}")
 
     # Append metrics to a JSONL file. Prefer eval.metrics_file if provided.
     metrics_file = None
@@ -633,7 +654,7 @@ def main(config):
         pass  # create the file if it doesn't exist
 
     with open(metrics_file, 'a') as f:
-      f.write(json.dumps({
+      metrics_dict = {
         'mauve': mauve_score,
         'diversity': diversity,
         'gen_ppl': gen_ppl,
@@ -641,7 +662,12 @@ def main(config):
         'levenshtein_distance': levenshtein_distance,
         'seed': config.seed,
         'checkpoint': config.eval.checkpoint_path
-      }) + '\n')
+      }
+      if first_step_accuracy is not None:
+        metrics_dict['first_step_accuracy'] = first_step_accuracy
+      if first_step_levenshtein is not None:
+        metrics_dict['first_step_levenshtein'] = first_step_levenshtein
+      f.write(json.dumps(metrics_dict) + '\n')
   elif config.mode == 'ppl_eval':
     _ppl_eval(config, logger, tokenizer)
   elif config.mode == 'condition_dependence_test':

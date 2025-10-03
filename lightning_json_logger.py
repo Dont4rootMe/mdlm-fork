@@ -82,7 +82,7 @@ class LightningJSONLogger(Logger if LIGHTNING_AVAILABLE else object):
         
     def _setup_plots(self):
         """Initialize matplotlib plots."""
-        self._fig, self._axes = plt.subplots(2, 3, figsize=(15, 10))
+        self._fig, self._axes = plt.subplots(3, 3, figsize=(18, 12))
         self._fig.suptitle(f'Training Metrics - {self._experiment_name}')
         plt.tight_layout()
         
@@ -254,11 +254,11 @@ class LightningJSONLogger(Logger if LIGHTNING_AVAILABLE else object):
             for ax in self._axes.flat:
                 ax.clear()
             
-            # Plot up to 6 metrics (2x3 grid)
-            if len(metric_names) > 6:
-                print(f"Warning: Found {len(metric_names)} metrics, but only showing first 6 in plots: {metric_names[:6]}")
+            # Plot up to 9 metrics (3x3 grid)
+            if len(metric_names) > 9:
+                print(f"Warning: Found {len(metric_names)} metrics, but only showing first 9 in plots: {metric_names[:9]}")
             
-            for i, metric_name in enumerate(metric_names[:6]):
+            for i, metric_name in enumerate(metric_names[:9]):
                 row, col = divmod(i, 3)
                 ax = self._axes[row, col]
                 
@@ -301,7 +301,7 @@ class LightningJSONLogger(Logger if LIGHTNING_AVAILABLE else object):
                     ax.set_visible(False)
             
             # Hide unused subplots
-            for i in range(len(metric_names), 6):
+            for i in range(len(metric_names), 9):
                 row, col = divmod(i, 3)
                 self._axes[row, col].set_visible(False)
             
