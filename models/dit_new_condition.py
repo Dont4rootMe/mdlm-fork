@@ -215,10 +215,9 @@ class LabelEmbedder(nn.Module):
 
 
 class DDiTBlock(nn.Module):
-  def __init__(self, dim, n_heads, cond_dim, cond_dim_embedding, mlp_ratio=4, dropout=0.1, use_residual_modulation: bool = False, use_weighted_sum: bool = True):
+  def __init__(self, dim, n_heads, cond_dim, mlp_ratio=4, dropout=0.1):
     super().__init__()
     self.n_heads = n_heads
-    self.use_weighted_sum = bool(use_weighted_sum)
 
     self.norm1 = LayerNorm(dim)
     self.attn_qkv = nn.Linear(dim, 3 * dim, bias=False)
@@ -238,82 +237,19 @@ class DDiTBlock(nn.Module):
     self.adaLN_modulation.weight.data.zero_()
     self.adaLN_modulation.bias.data.zero_()
     
-    # Condition embedding conditioning
-    self.cond_embedding_modulation = nn.Linear(cond_dim_embedding, 6 * dim, bias=True)
-
-    # Optional: residual FiLM from (condition - curr_embed) in the ORIGINAL cond space
-    self.use_residual_modulation = bool(use_residual_modulation)
-    if self.use_residual_modulation:
-      # Map residual_error (B, cond_dim) -> 6 * dim deltas; zero-init to preserve old behavior
-      self.residual_embedding_modulation = nn.Linear(cond_dim_embedding, 6 * dim, bias=True)
-      init.xavier_uniform_(self.residual_embedding_modulation.weight)
-      init.zeros_(self.residual_embedding_modulation.bias)
-      
-      self.curr_embed_modulation = nn.Linear(cond_dim_embedding, 6 * dim, bias=True)
-      init.xavier_uniform_(self.curr_embed_modulation.weight)
-      init.zeros_(self.curr_embed_modulation.bias)
-      
-      # coefficients in weighted sum
-      self.res_w = nn.Parameter(torch.ones(6, 2)) if use_weighted_sum else torch.ones(6, 2) * 0.5
-    else:
-      self.residual_embedding_modulation = None
-      self.res_w = None
-
   def _get_bias_dropout_scale(self):
     if self.training:
       return bias_dropout_add_scale_fused_train
     else:
       return bias_dropout_add_scale_fused_inference
 
-  def forward(self, x, rotary_cos_sin, c, cond, seqlens=None, curr_embed=None, residual=None):
+  def forward(self, x, rotary_cos_sin, c, seqlens=None, curr_embed=None, residual=None):
     batch_size, seq_len = x.shape[0], x.shape[1]
 
     bias_dropout_scale_fn = self._get_bias_dropout_scale()
-
-    # print('\n\n\n\n\n\n')
-    # print(f"x: {x.shape}")
-    # print(f"c: {c.shape}")
-    # print(f"cond: {cond.shape}")
-    # print(f"seqlens: {seqlens.shape if seqlens is not None else None}")
-    # print(f"curr_embed: {curr_embed.shape if curr_embed is not None else None}")
-    # print(f"residual: {residual.shape if residual is not None else None}")
-    # print('\n\n\n\n\n\n')
-    
     # Process sigma conditioning
-    (shift_msa_sigma, scale_msa_sigma, gate_msa_sigma, shift_mlp_sigma,
-     scale_mlp_sigma, gate_mlp_sigma) = self.adaLN_modulation(c)[:, None].chunk(6, dim=2)
-    
-    # Process condition embedding conditioning
-    (shift_msa_cond, scale_msa_cond, gate_msa_cond, shift_mlp_cond,
-     scale_mlp_cond, gate_mlp_cond) = self.cond_embedding_modulation(cond)[:, None].chunk(6, dim=2)
-    
-    # Combine conditioning parameters (base)
-    shift_msa = shift_msa_sigma + shift_msa_cond
-    scale_msa = scale_msa_sigma + scale_msa_cond
-    gate_msa = gate_msa_sigma + gate_msa_cond
-    shift_mlp = shift_mlp_sigma + shift_mlp_cond
-    scale_mlp = scale_mlp_sigma + scale_mlp_cond
-    gate_mlp = gate_mlp_sigma + gate_mlp_cond
-
-    # Optional residual FiLM: apply deltas derived from residual_error = condition - curr_embed
-    if (self.residual_embedding_modulation is not None) and (residual is not None):
-      # residual has shape (B, cond_dim)
-      # print(f"residual: {residual.shape}")
-      # print(f"residual_embedding_modulation: {self.residual_embedding_modulation.weight.shape}")
-      (res_shift_msa, res_scale_msa, res_gate_msa,
-       res_shift_mlp, res_scale_mlp, res_gate_mlp) = self.residual_embedding_modulation(residual)[:, None].chunk(6, dim=2)
-
-      # curr_embed has shape (B, cond_dim)
-      (curr_shift_msa, curr_scale_msa, curr_gate_msa,
-       curr_shift_mlp, curr_scale_mlp, curr_gate_mlp) = self.curr_embed_modulation(curr_embed)[:, None].chunk(6, dim=2)
-      
-      # apply weighted sum
-      shift_msa = shift_msa + self.res_w[0, 0] * res_shift_msa + self.res_w[0, 1] * curr_shift_msa  
-      scale_msa = scale_msa + self.res_w[1, 0] * res_scale_msa + self.res_w[1, 1] * curr_scale_msa
-      gate_msa  = gate_msa  + self.res_w[2, 0] * res_gate_msa  + self.res_w[2, 1] * curr_gate_msa
-      shift_mlp = shift_mlp + self.res_w[3, 0] * res_shift_mlp + self.res_w[3, 1] * curr_shift_mlp
-      scale_mlp = scale_mlp + self.res_w[4, 0] * res_scale_mlp + self.res_w[4, 1] * curr_scale_mlp
-      gate_mlp  = gate_mlp  + self.res_w[5, 0] * res_gate_mlp  + self.res_w[5, 1] * curr_gate_mlp
+    (shift_msa, scale_msa, gate_msa, shift_mlp,
+     scale_mlp, gate_mlp) = self.adaLN_modulation(c)[:, None].chunk(6, dim=2)
 
     # attention operation
     x_skip = x
@@ -378,7 +314,7 @@ class EmbeddingLayer(nn.Module):
 
 
 class DDitFinalLayer(nn.Module):
-  def __init__(self, hidden_size, out_channels, cond_dim, cond_dim_embedding):
+  def __init__(self, hidden_size, out_channels, cond_dim):
     super().__init__()
     self.norm_final = LayerNorm(hidden_size)
     # As before: main projection for all but the last token
@@ -396,22 +332,11 @@ class DDitFinalLayer(nn.Module):
                                       bias=True)
     self.adaLN_modulation.weight.data.zero_()
     self.adaLN_modulation.bias.data.zero_()
-    
-    # Condition embedding conditioning
-    self.cond_embedding_modulation = nn.Linear(cond_dim_embedding,
-                                               2 * hidden_size,
-                                               bias=True)
 
-  def forward(self, x, c, cond):
+
+  def forward(self, x, c):
     # Process sigma conditioning
-    shift_sigma, scale_sigma = self.adaLN_modulation(c)[:, None].chunk(2, dim=2)
-    
-    # Process condition embedding conditioning
-    shift_cond, scale_cond = self.cond_embedding_modulation(cond)[:, None].chunk(2, dim=2)
-    
-    # Combine conditioning parameters
-    shift = shift_sigma + shift_cond
-    scale = scale_sigma + scale_cond
+    shift, scale = self.adaLN_modulation(c)[:, None].chunk(2, dim=2)
     
     x_mod = modulate_fused(self.norm_final(x), shift, scale)
     x_main = self.linear(x_mod)  # (..., out_channels - 1)
@@ -421,28 +346,30 @@ class DDitFinalLayer(nn.Module):
 
 
 class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
-  def __init__(self, config, vocab_size: int, cond_dim: int = None, use_residual_modulation: bool = False, use_weighted_sum: bool = True):
+  def __init__(self, config, vocab_size: int, cond_dim: int = None, *args, **kwargs):
     super().__init__()
+    
+    print('\n\n============\nUNUSED ARGS:')
+    print(args)
+    print(kwargs)
+    print('============\n')
+    
     if type(config) == dict:
       config = omegaconf.OmegaConf.create(config)
-
-    print('\n\n\n\n\n\n')
-    print(use_residual_modulation, use_weighted_sum, 
-          '\n\n\n\n\n\n')
   
     self.config = config
     self.vocab_size = vocab_size
-    self.use_residual_modulation = bool(use_residual_modulation)
-    self.use_weighted_sum = bool(use_weighted_sum) and self.use_residual_modulation
 
     self.vocab_embed = EmbeddingLayer(config.model.hidden_size,
                                       vocab_size)
     self.sigma_map = TimestepEmbedder(config.model.cond_dim)
+    
     if cond_dim is not None:
-      self.cond_embed = nn.Linear(cond_dim, config.model.cond_dim_embedding)
-      print(f"\n\n\ncond_embed: {config.model.cond_dim_embedding}\n\n\n")
+      self.cond_embed_prj = nn.Identity() if cond_dim == config.model.hidden_size else \
+          nn.Linear(cond_dim, config.model.hidden_size)
     else:
-      self.cond_embed = None
+      self.cond_embed_prj = None
+    
     self.rotary_emb = Rotary(
       config.model.hidden_size // config.model.n_heads)
 
@@ -451,17 +378,14 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
       blocks.append(DDiTBlock(config.model.hidden_size,
                               config.model.n_heads,
                               config.model.cond_dim,
-                              config.model.cond_dim_embedding,
-                              dropout=config.model.dropout,
-                              use_residual_modulation=self.use_residual_modulation,
-                              use_weighted_sum=self.use_weighted_sum))
+                              dropout=config.model.dropout))
+    
     self.blocks = nn.ModuleList(blocks)
 
     self.output_layer = DDitFinalLayer(
       config.model.hidden_size,
       vocab_size,
-      config.model.cond_dim,
-      config.model.cond_dim_embedding)
+      config.model.cond_dim)
     self.scale_by_sigma = config.model.scale_by_sigma
 
   def _get_bias_dropout_scale(self):
@@ -470,40 +394,24 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     else:
       return  bias_dropout_add_scale_fused_inference
 
-  def forward(self, indices, sigma, condition, curr_embed: typing.Optional[torch.Tensor] = None):
-    x = self.vocab_embed(indices)
-    c = F.silu(self.sigma_map(sigma))
+  def forward(self, indices, sigma, condition, curr_embed: typing.Optional[torch.Tensor] = None, *args, **kwargs):
+    x = self.vocab_embed(indices)       # [B x T x d]
+    c = F.silu(self.sigma_map(sigma))   # [B x d]
 
-    # If unconditional (no cond_embed or no condition), use zeros
-    if self.cond_embed is None or condition is None:
-      cond = torch.zeros((x.shape[0], self.config.model.cond_dim_embedding), device=x.device, dtype=x.dtype)
-      residual = None
-    else:
-      cond = F.silu(self.cond_embed(condition))
-      # Apply condition dropout during training
-      if self.training and self.config.text_embedder.cond_dropout > 0:
-        batch_size = cond.shape[0]
-        dropout_mask = torch.rand(batch_size, 1, device=cond.device) >= self.config.text_embedder.cond_dropout
-        dropout_std = float(self.config.text_embedder.cond_dropout_std)
-        if dropout_std > 0.0:
-          noise = torch.randn_like(cond) * dropout_std
-          cond = cond * dropout_mask.float() + noise * (~dropout_mask).float()
-        else:
-          cond = cond * dropout_mask.float()
-      # Compute residual only if feature is enabled AND curr_embed is provided
-      if self.use_residual_modulation and (curr_embed is not None):
-        curr_embed = F.silu(self.cond_embed(curr_embed))
-        
-        # residual in ORIGINAL cond space (same shape as `condition`): (B, cond_dim)
-        residual = cond - curr_embed
+    if self.cond_embed_prj is not None: 
+      if condition is None:
+        cond = torch.zeros((x.shape[0], 1, self.config.model.cond_dim_embedding), device=x.device, dtype=x.dtype)
       else:
-        residual = None
-    
+        cond = F.silu(self.cond_embed_prj(condition)).unsqueeze(1)
+        
+      # cond.shape = [B x 1 x d]
+      x = torch.cat([cond, x], dim=1)
+
     rotary_cos_sin = self.rotary_emb(x)
 
     with torch.cuda.amp.autocast(dtype=torch.bfloat16):
       for i in range(len(self.blocks)):
-        x = self.blocks[i](x, rotary_cos_sin, c, cond, seqlens=None, curr_embed=curr_embed, residual=residual)
-      x = self.output_layer(x, c, cond)
+        x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
+      x = self.output_layer(x, c)
 
     return x

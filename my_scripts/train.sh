@@ -2,6 +2,7 @@ WANDB_API_KEY=e54e11c5a3971ce143232dc777a77b7734c1d25e \
 WANDB_BASE_URL=https://api.wandb.ai \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 python main.py \
+  USING_NEW_CONDITIONING=true \
   model=small \
   mode=train \
   data=openwebtext-split \

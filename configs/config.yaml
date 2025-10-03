@@ -20,6 +20,8 @@ time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 
 subs_masking: False
 
+USING_NEW_CONDITIONING: true
+
 seed: 2
 
 text_embedder:

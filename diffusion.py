@@ -25,6 +25,110 @@ from models.remaskator2 import Remaskator2Net
 LOG2 = math.log(2)
 
 
+def _compute_levenshtein_distance(seq1, seq2):
+  """Compute Levenshtein distance between two sequences (token lists).
+  
+  Args:
+    seq1: First sequence (list of tokens)
+    seq2: Second sequence (list of tokens)
+    
+  Returns:
+    int: Levenshtein distance between the sequences
+  """
+  if len(seq1) == 0:
+    return len(seq2)
+  if len(seq2) == 0:
+    return len(seq1)
+    
+  # Create a matrix to store distances
+  matrix = [[0] * (len(seq2) + 1) for _ in range(len(seq1) + 1)]
+  
+  # Initialize first row and column
+  for i in range(len(seq1) + 1):
+    matrix[i][0] = i
+  for j in range(len(seq2) + 1):
+    matrix[0][j] = j
+    
+  # Fill the matrix
+  for i in range(1, len(seq1) + 1):
+    for j in range(1, len(seq2) + 1):
+      if seq1[i-1] == seq2[j-1]:
+        cost = 0
+      else:
+        cost = 1
+        
+      matrix[i][j] = min(
+        matrix[i-1][j] + 1,      # deletion
+        matrix[i][j-1] + 1,      # insertion
+        matrix[i-1][j-1] + cost  # substitution
+      )
+  
+  return matrix[len(seq1)][len(seq2)]
+
+
+def _compute_first_step_accuracy_and_levenshtein(tokenizer, predicted_tokens, reference_tokens):
+  """Compute token-level accuracy and Levenshtein distance for first step predictions.
+  
+  Args:
+    tokenizer: The tokenizer used to encode/decode texts
+    predicted_tokens: Tensor of shape (batch_size, seq_len) with predicted token ids
+    reference_tokens: Tensor of shape (batch_size, seq_len) with reference token ids
+    
+  Returns:
+    tuple: (mean_accuracy, mean_levenshtein_distance) across batch
+  """
+  if predicted_tokens.shape != reference_tokens.shape:
+    return 0.0, 0.0
+    
+  batch_size = predicted_tokens.shape[0]
+  total_accuracy = 0.0
+  total_levenshtein = 0.0
+  valid_pairs = 0
+  
+  for i in range(batch_size):
+    pred_tokens = predicted_tokens[i].cpu().tolist()
+    ref_tokens = reference_tokens[i].cpu().tolist()
+    
+    # Skip padding tokens if present
+    pad_token_id = getattr(tokenizer, 'pad_token_id', None)
+    if pad_token_id is not None:
+      # Find first pad token in reference to get actual length
+      try:
+        ref_len = ref_tokens.index(pad_token_id)
+        ref_tokens = ref_tokens[:ref_len]
+        pred_tokens = pred_tokens[:ref_len]
+      except ValueError:
+        # No pad token found, use full length
+        pass
+    
+    if len(ref_tokens) == 0:
+      continue
+      
+    # Compute token-level accuracy for this pair
+    min_length = min(len(pred_tokens), len(ref_tokens))
+    if min_length > 0:
+      # Count matching tokens (prefix accuracy)
+      matches = sum(1 for j in range(min_length) if pred_tokens[j] == ref_tokens[j])
+      pair_accuracy = matches / len(ref_tokens)  # Normalize by reference length
+    else:
+      pair_accuracy = 0.0
+    
+    # Compute Levenshtein distance
+    levenshtein_dist = _compute_levenshtein_distance(pred_tokens, ref_tokens)
+    # Normalize by reference length to get a relative distance
+    normalized_levenshtein = levenshtein_dist / len(ref_tokens) if len(ref_tokens) > 0 else 0.0
+    
+    total_accuracy += pair_accuracy
+    total_levenshtein += normalized_levenshtein
+    valid_pairs += 1
+  
+  # Return mean accuracy and mean normalized Levenshtein distance across batch
+  if valid_pairs > 0:
+    return total_accuracy / valid_pairs, total_levenshtein / valid_pairs
+  else:
+    return 0.0, 0.0
+
+
 def _sample_categorical(categorical_probs):
   categorical_probs = categorical_probs.to(torch.float64)
   gumbel_norm = (
@@ -68,6 +172,16 @@ class Perplexity(NLL):
      Perplexity
     """
     return torch.exp(self.mean_value / self.weight)
+
+
+class FirstStepAccuracy(torchmetrics.aggregation.MeanMetric):
+  """Metric for tracking accuracy on first denoising step."""
+  pass
+
+
+class FirstStepLevenshtein(torchmetrics.aggregation.MeanMetric):
+  """Metric for tracking Levenshtein distance on first denoising step."""
+  pass
 
 
 class Diffusion(L.LightningModule):
@@ -135,17 +249,22 @@ class Diffusion(L.LightningModule):
         use_weighted_sum = self.config.sub_conditioning.get('use_weighted_sum', False)
         use_residual_modulation = self.config.sub_conditioning.get('use_residual_modulation', False)
       
-      self.backbone = models.dit.DIT(
-        self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
-        use_residual_modulation=use_residual_modulation,
-        use_weighted_sum=use_weighted_sum
-      )
       
-    # elif self.config.backbone == 'dimamba':
-    #   self.backbone = models.dimamba.DiMamba(
-    #     self.config,
-    #     vocab_size=self.vocab_size,
-    #     pad_token_id=self.tokenizer.pad_token_id)
+      # =========================================
+      #        - ADDING NEW CONDITIONING -       
+      # =========================================
+      
+      if self.config.USING_NEW_CONDITIONING:
+        self.backbone = models.dit_new_condition.DIT(
+          self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
+        )
+      else:
+        self.backbone = models.dit.DIT(
+          self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
+          use_residual_modulation=use_residual_modulation,
+          use_weighted_sum=use_weighted_sum
+        )
+      
     elif self.config.backbone == 'ar':
       self.backbone = models.autoregressive.AR(
         self.config,
@@ -172,6 +291,14 @@ class Diffusion(L.LightningModule):
     self.train_metrics = metrics.clone(prefix='train/')
     self.valid_metrics = metrics.clone(prefix='val/')
     self.test_metrics = metrics.clone(prefix='test/')
+    
+    # First step denoising metrics (only for validation)
+    first_step_metrics = torchmetrics.MetricCollection({
+      'first_step_accuracy': FirstStepAccuracy(),
+      'first_step_levenshtein': FirstStepLevenshtein(),
+    })
+    first_step_metrics.set_dtype(torch.float64)
+    self.valid_first_step_metrics = first_step_metrics.clone(prefix='val/')
 
     # generative perplexity
     self.gen_ppl_metric = Perplexity()
@@ -529,7 +656,13 @@ class Diffusion(L.LightningModule):
     assert self.valid_metrics.nll.weight == 0
 
   def validation_step(self, batch, batch_idx):
-    return self._compute_loss(batch, prefix='val')
+    loss = self._compute_loss(batch, prefix='val')
+    
+    # Compute first step denoising metrics
+    if 'input_ids' in batch:
+      self._compute_first_step_metrics(batch['input_ids'])
+    
+    return loss
 
   def on_validation_epoch_end(self):
     if ((self.config.eval.compute_perplexity_on_sanity
