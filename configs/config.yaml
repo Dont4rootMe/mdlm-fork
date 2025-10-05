@@ -20,7 +20,9 @@ time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 
 subs_masking: False
 
-USING_NEW_CONDITIONING: true
+
+TYPE_OF_CONDITIONING: 'attention'  # attention / pos_embedding / dit
+
 
 seed: 2
 

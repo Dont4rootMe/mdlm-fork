@@ -254,8 +254,12 @@ class Diffusion(L.LightningModule):
       #        - ADDING NEW CONDITIONING -       
       # =========================================
       
-      if self.config.USING_NEW_CONDITIONING:
+      if self.config.TYPE_OF_CONDITIONING == 'attention':
         self.backbone = models.dit_new_condition.DIT(
+          self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
+        )
+      elif self.config.TYPE_OF_CONDITIONING == 'pos_embedding':
+        self.backbone = models.dit_positional_condition.DIT(
           self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
         )
       else:
@@ -674,11 +678,15 @@ class Diffusion(L.LightningModule):
     accuracy, levenshtein = _compute_first_step_accuracy_and_levenshtein(
       self.tokenizer, predicted_tokens, x0)
     
-    # Update metrics
-    self.valid_first_step_metrics.update({
-      'first_step_accuracy': torch.tensor(accuracy, device=x0.device),
-      'first_step_levenshtein': torch.tensor(levenshtein, device=x0.device)
-    }, weight=torch.tensor(batch_size, device=x0.device))
+    # Update metrics individually
+    self.valid_first_step_metrics['val/first_step_accuracy'].update(
+      torch.tensor(accuracy, device=x0.device), 
+      weight=torch.tensor(batch_size, device=x0.device)
+    )
+    self.valid_first_step_metrics['val/first_step_levenshtein'].update(
+      torch.tensor(levenshtein, device=x0.device), 
+      weight=torch.tensor(batch_size, device=x0.device)
+    )
     
     # Log metrics
     self.log_dict(self.valid_first_step_metrics,

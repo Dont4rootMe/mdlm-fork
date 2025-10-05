@@ -248,8 +248,9 @@ class DDiTBlock(nn.Module):
 
     bias_dropout_scale_fn = self._get_bias_dropout_scale()
     # Process sigma conditioning
+    
     (shift_msa, scale_msa, gate_msa, shift_mlp,
-     scale_mlp, gate_mlp) = self.adaLN_modulation(c)[:, None].chunk(6, dim=2)
+     scale_mlp, gate_mlp) = self.adaLN_modulation(c).reshape(x.shape[0], 1, -1).chunk(6, dim=2)
 
     # attention operation
     x_skip = x
@@ -336,7 +337,7 @@ class DDitFinalLayer(nn.Module):
 
   def forward(self, x, c):
     # Process sigma conditioning
-    shift, scale = self.adaLN_modulation(c)[:, None].chunk(2, dim=2)
+    shift, scale = self.adaLN_modulation(c).reshape(x.shape[0], 1, -1).chunk(2, dim=2)
     
     x_mod = modulate_fused(self.norm_final(x), shift, scale)
     x_main = self.linear(x_mod)  # (..., out_channels - 1)
@@ -414,4 +415,4 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
       x = self.output_layer(x, c)
 
-    return x
+    return x[:, 1:, :]
