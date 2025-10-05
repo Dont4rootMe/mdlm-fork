@@ -152,27 +152,11 @@ class ConditionalPositionalEmbeddings(torch.nn.Module):
     Returns:
       (cos, sin) tensors for rotary embeddings
     """
-    print("\n\n\n================================")
-    print("ConditionalPositionalEmbeddings forward")
-    print("================================")
-    print(f"x.shape: {x.shape}")
-    print(f"condition.shape: {condition.shape}")
-    print(f"seq_dim: {seq_dim}")
-    print("================================\n\n\n")
+
     seq_len = x.shape[seq_dim]
     batch_size = x.shape[0]
     device = x.device
     dtype = x.dtype
-
-
-# ================================
-# ConditionalPositionalEmbeddings forward
-# ================================
-# x.shape: torch.Size([256, 129, 768])
-# condition.shape: torch.Size([256, 768])
-# seq_dim: 1
-# ================================
-
 
     # Get base embeddings
     cos_base, sin_base = self._compute_base_embeddings(seq_len, device, dtype)
