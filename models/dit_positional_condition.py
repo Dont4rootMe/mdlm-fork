@@ -152,11 +152,28 @@ class ConditionalPositionalEmbeddings(torch.nn.Module):
     Returns:
       (cos, sin) tensors for rotary embeddings
     """
+    print("\n\n\n================================")
+    print("ConditionalPositionalEmbeddings forward")
+    print("================================")
+    print(f"x.shape: {x.shape}")
+    print(f"condition.shape: {condition.shape}")
+    print(f"seq_dim: {seq_dim}")
+    print("================================\n\n\n")
     seq_len = x.shape[seq_dim]
     batch_size = x.shape[0]
     device = x.device
     dtype = x.dtype
-    
+
+
+# ================================
+# ConditionalPositionalEmbeddings forward
+# ================================
+# x.shape: torch.Size([256, 129, 768])
+# condition.shape: torch.Size([256, 768])
+# seq_dim: 1
+# ================================
+
+
     # Get base embeddings
     cos_base, sin_base = self._compute_base_embeddings(seq_len, device, dtype)
     
@@ -183,7 +200,7 @@ class ConditionalPositionalEmbeddings(torch.nn.Module):
     # Compute frequencies with adjustments
     # t: [seq_len] -> [1, seq_len, 1]
     # adjusted_inv_freq: [batch_size, 1, dim//2]
-    freqs = torch.einsum("si,bij->bsj", t[None, :, None], adjusted_inv_freq)
+    freqs = torch.einsum("asi,bij->bsj", t[None, :, None], adjusted_inv_freq)
     
     # Add phase adjustments
     # phase_adj: [batch_size, dim//2] -> [batch_size, 1, dim//2]
@@ -372,7 +389,7 @@ class DDiTBlock(nn.Module):
     bias_dropout_scale_fn = self._get_bias_dropout_scale()
     # Process sigma conditioning
     (shift_msa, scale_msa, gate_msa, shift_mlp,
-     scale_mlp, gate_mlp) = self.adaLN_modulation(c)[:, None].chunk(6, dim=2)
+     scale_mlp, gate_mlp) = self.adaLN_modulation(c).reshape(x.shape[0], 1, -1).chunk(6, dim=2)
 
     # attention operation
     x_skip = x
@@ -459,7 +476,7 @@ class DDitFinalLayer(nn.Module):
 
   def forward(self, x, c):
     # Process sigma conditioning
-    shift, scale = self.adaLN_modulation(c)[:, None].chunk(2, dim=2)
+    shift, scale = self.adaLN_modulation(c).reshape(x.shape[0], 1, -1).chunk(2, dim=2)
     
     x_mod = modulate_fused(self.norm_final(x), shift, scale)
     x_main = self.linear(x_mod)  # (..., out_channels - 1)
@@ -535,9 +552,6 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         cond = F.silu(self.cond_embed_prj(condition)).unsqueeze(1)
         # Keep original condition for positional embeddings
         condition_for_pos = condition
-        
-      # cond.shape = [B x 1 x d]
-      x = torch.cat([cond, x], dim=1)
     else:
       condition_for_pos = None
 

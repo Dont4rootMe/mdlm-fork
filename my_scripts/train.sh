@@ -27,5 +27,5 @@ python main.py \
   data.wrap=False \
   vae_encoder.enabled=true \
   sub_conditioning.enabled=false \
-  experiment_name='vae_embed_train_pos_embedding'
+  experiment_name='vae_embed_train_new_conditioning'
   # +embedding_cache_dir=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/embedding_cache \
