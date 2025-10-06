@@ -104,6 +104,7 @@ remaskator:
   val_check_interval: 1000
   # Optimizer settings
   lr: 3e-4
+  initialization: null
 
 eval:
   checkpoint_path: ''  # Used to evaluate a checkpoint after training.

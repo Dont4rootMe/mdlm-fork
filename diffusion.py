@@ -255,14 +255,17 @@ class Diffusion(L.LightningModule):
       # =========================================
       
       if self.config.TYPE_OF_CONDITIONING == 'attention':
+        print("Using attention conditioning")
         self.backbone = models.dit_new_condition.DIT(
           self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
         )
       elif self.config.TYPE_OF_CONDITIONING == 'pos_embedding':
+        print("Using pos_embedding conditioning")
         self.backbone = models.dit_positional_condition.DIT(
           self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
         )
       else:
+        print("Using dit conditioning")
         self.backbone = models.dit.DIT(
           self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
           use_residual_modulation=use_residual_modulation,
@@ -361,6 +364,9 @@ class Diffusion(L.LightningModule):
         self.remaskator.eval()
       
     if self.config.training.ema > 0:
+      
+      torch.save([(i[0], i[1].cpu().detach().numpy().shape) for i in self.backbone.named_parameters()], '/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/named_parameters.pt')
+      
       self.ema = models.ema.ExponentialMovingAverage(
         itertools.chain(self.backbone.parameters(),
                         self.noise.parameters()),

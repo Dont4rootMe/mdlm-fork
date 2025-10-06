@@ -346,7 +346,9 @@ class RemaskatorModule(L.LightningModule):
 
   def validation_step(self, batch, batch_idx):
     if self.index_first_val:
-      torch.save(self.net.state_dict(), f"/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/projects/mdlm-fork/vae_tasks/global_condition_remaskator/checkpoints/net_state.pt")
+      save_dir = f"/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/projects/mdlm-fork/remaskator_train_vae_embed_attention"
+      os.makedirs(save_dir, exist_ok=True)
+      torch.save(self.net.state_dict(), f"{save_dir}/net_state.pt")
     self.index_first_val = False
     
     x0 = batch['input_ids'].to(self.device)
@@ -453,7 +455,10 @@ def main(config: omegaconf.DictConfig):
   # Module
   module = RemaskatorModule(config=config, tokenizer=tokenizer, denoiser=denoiser, json_loggers=json_loggers)
   # load weight from denoiser
-  missing_keys, unexpected_keys = module.net.dit.load_state_dict(denoiser.backbone.state_dict(), strict=False)
+  if config.remaskator.initialization is not None:
+    module.net.dit.load_state_dict(torch.load(config.remaskator.initialization), strict=False)
+  else: 
+    missing_keys, unexpected_keys = module.net.dit.load_state_dict(denoiser.backbone.state_dict(), strict=False)
   print(f"Missing keys: {missing_keys}")
   print(f"Unexpected keys: {unexpected_keys}")
   module.net.change_final_layer()
