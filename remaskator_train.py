@@ -346,7 +346,7 @@ class RemaskatorModule(L.LightningModule):
 
   def validation_step(self, batch, batch_idx):
     if self.index_first_val:
-      save_dir = f"/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/projects/mdlm-fork/remaskator_train_vae_embed_attention"
+      save_dir = f"/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/projects/mdlm-fork/remaskator_checkpoints/remaskator_train_vae_pos_embeddings"
       os.makedirs(save_dir, exist_ok=True)
       torch.save(self.net.state_dict(), f"{save_dir}/net_state.pt")
     self.index_first_val = False
@@ -456,7 +456,11 @@ def main(config: omegaconf.DictConfig):
   module = RemaskatorModule(config=config, tokenizer=tokenizer, denoiser=denoiser, json_loggers=json_loggers)
   # load weight from denoiser
   if config.remaskator.initialization is not None:
-    module.net.dit.load_state_dict(torch.load(config.remaskator.initialization), strict=False)
+    
+    state_dict = torch.load(config.remaskator.initialization)
+    state_dict = {k.replace('backbone.', ''): v for k, v in state_dict['state_dict'].items() if 'backbone' in k}
+    
+    missing_keys, unexpected_keys = module.net.dit.load_state_dict(state_dict, strict=False)
   else: 
     missing_keys, unexpected_keys = module.net.dit.load_state_dict(denoiser.backbone.state_dict(), strict=False)
   print(f"Missing keys: {missing_keys}")

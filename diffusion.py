@@ -362,10 +362,9 @@ class Diffusion(L.LightningModule):
         for p in self.remaskator.parameters():
           p.requires_grad = False
         self.remaskator.eval()
-      
     if self.config.training.ema > 0:
       
-      torch.save([(i[0], i[1].cpu().detach().numpy().shape) for i in self.backbone.named_parameters()], '/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/named_parameters.pt')
+      print('\n========', len([*self.backbone.parameters()]), len([*self.noise.parameters()]), '\n========\n\n\n')
       
       self.ema = models.ema.ExponentialMovingAverage(
         itertools.chain(self.backbone.parameters(),

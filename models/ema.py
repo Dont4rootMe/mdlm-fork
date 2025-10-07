@@ -96,6 +96,9 @@ class ExponentialMovingAverage:
     self.num_updates = state_dict['num_updates']
     # self.shadow_params = state_dict['shadow_params']
     index_self_shadow_params = 0
+    
+    print(len(self.shadow_params), len(state_dict['shadow_params']))
+    
     for new_shadow_param in state_dict['shadow_params']:
       # while shapes are not the same move the index forward
       while self.shadow_params[index_self_shadow_params].shape != new_shadow_param.shape:

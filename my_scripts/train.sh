@@ -2,7 +2,7 @@ WANDB_API_KEY=e54e11c5a3971ce143232dc777a77b7734c1d25e \
 WANDB_BASE_URL=https://api.wandb.ai \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 python main.py \
-  TYPE_OF_CONDITIONING='pos_embedding' \
+  TYPE_OF_CONDITIONING='attention' \
   model=small \
   mode=train \
   data=openwebtext-split \
@@ -27,5 +27,5 @@ python main.py \
   data.wrap=False \
   vae_encoder.enabled=true \
   sub_conditioning.enabled=false \
-  experiment_name='vae_embed_train_new_conditioning'
+  experiment_name='dit_attention_conditioning'
   # +embedding_cache_dir=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/embedding_cache \
