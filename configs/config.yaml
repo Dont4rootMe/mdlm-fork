@@ -87,6 +87,7 @@ sampling:
   remaskator_t_on: 0.55
 
 training:
+  change_scheduler: false
   ema: 0.9999
   antithetic_sampling: True
   importance_sampling: False

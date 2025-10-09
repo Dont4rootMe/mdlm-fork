@@ -1,16 +1,24 @@
 # for temp in 4 8 10000; do
 
-REMASKATOR_CHECKPOINT_PATH=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/remaskator_for_vae.pth
-CHECKPOINT_PATH=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/mdlm_dit.pth
+REMASKATOR_CHECKPOINT_PATH=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/remaskator_for_vae.pthnone
+CHECKPOINT_PATH=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/attention/dit_attention_changed_scheduler.ckpt
 
-ROOT_RESULTS_DIR=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/results/vae_with_accuracy/nucleus_10/remaskator
+# /mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/attention/dit_attention_changed_scheduler.ckpt
+
+# /mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/pos_embed/dit_pos_embed_changed_scheduler.ckpt
+
+
+ROOT_RESULTS_DIR=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/results/attention_changed_scheduler/nucleus_10
 mkdir -p ${ROOT_RESULTS_DIR}
 
-# for temp in 0; do
-for temp in 0 0.5 1; do
+# ddpm_cache / remaskator 
+
+# for temp in 0 0.5 1; do
+for temp in 0; do
   mkdir -p ${ROOT_RESULTS_DIR}/temp_${temp}
   echo "Sampling with temperature ${temp}"
-  CUDA_VISIBLE_DEVICES=2 HF_TOKEN="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" python main.py \
+  CUDA_VISIBLE_DEVICES=0 HF_TOKEN="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" python main.py \
+    TYPE_OF_CONDITIONING=attention \
     mode=sample_eval \
     loader.batch_size=256 \
     loader.eval_batch_size=256 \
@@ -23,7 +31,7 @@ for temp in 0 0.5 1; do
     model.length=128 \
     model.cond_dim_embedding=384 \
     seed=11 \
-    sampling.predictor=remaskator \
+    sampling.predictor=ddpm_cache \
     sampling.remaskator_temperature=${temp} \
     sampling.remaskator_t_off=0.05 \
     sampling.remaskator_t_on=0.55 \

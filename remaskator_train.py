@@ -346,7 +346,7 @@ class RemaskatorModule(L.LightningModule):
 
   def validation_step(self, batch, batch_idx):
     if self.index_first_val:
-      save_dir = f"/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/projects/mdlm-fork/remaskator_checkpoints/remaskator_train_vae_pos_embeddings"
+      save_dir = f"/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/projects/mdlm-fork/remaskator_checkpoints/remaskator_attention_conditioning"
       os.makedirs(save_dir, exist_ok=True)
       torch.save(self.net.state_dict(), f"{save_dir}/net_state.pt")
     self.index_first_val = False

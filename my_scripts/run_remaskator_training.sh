@@ -3,8 +3,8 @@
 # Training script for remaskator using Hydra parameter overrides
 # Uses the specified checkpoint with 5 epochs and batch size 256
 
-checkpoint_path=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/dit_pos_embedding_cond.pth
-save_dir=/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/projects/mdlm-fork/remaskator_train_vae_embed_attention
+checkpoint_path=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/attention/dit_attention_cond.pth
+save_dir=/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/projects/mdlm-fork/remaskator_train_vae_attention_conditioning
 
 echo "Starting remaskator training..."
 echo "Checkpoint: $checkpoint_path"
@@ -23,7 +23,7 @@ python remaskator_train.py \
   mode=train \
   eval.checkpoint_path=$checkpoint_path \
   checkpointing.save_dir=$save_dir \
-  experiment_name='remaskator_train_vae_embed_pos_embedding' \
+  experiment_name='remaskator_train_vae_attention_conditioning' \
   trainer.max_epochs=10 \
   loader.batch_size=128 \
   loader.eval_batch_size=128 \

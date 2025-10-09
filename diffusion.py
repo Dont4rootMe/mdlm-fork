@@ -192,6 +192,8 @@ class Diffusion(L.LightningModule):
     super().__init__()
     self.save_hyperparameters()
     self.config = config
+    
+    self.change_time_scheduler = self.config.training.change_scheduler
 
     self.tokenizer = tokenizer
     self.vocab_size = len(self.tokenizer)
@@ -1690,6 +1692,13 @@ class Diffusion(L.LightningModule):
 
   def _sample_t(self, n, device):
     _eps_t = torch.rand(n, device=device)
+    if self.change_time_scheduler:
+      # Randomly select half of the indices to set to 0.999
+      perm = torch.randperm(n, device=device)
+      half_n = n // 2
+      idx = perm[:half_n]
+      _eps_t[idx] = 0.999
+    
     if self.antithetic_sampling:
       offset = torch.arange(n, device=device) / n
       _eps_t = (_eps_t / n + offset) % 1
