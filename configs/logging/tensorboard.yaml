@@ -1,0 +1,8 @@
+# Configuration for TensorBoard logging
+use_tensorboard_logger: true  # Use TensorBoard for logging
+use_json_logger: false  # Disable JSON logger
+use_wandb_logger: false  # Disable W&B logger
+
+# TensorBoard specific settings
+# Logs will be saved to: {hydra.run.dir}/tensorboard_logs/{experiment_name}/version_X/
+

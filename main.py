@@ -20,7 +20,7 @@ import dataloader
 import diffusion
 import utils
 from safetensors.torch import load_file
-from lightning_json_logger import LightningJSONLogger
+from lightning.pytorch.loggers import TensorBoardLogger
 
 import mauve
 
@@ -554,19 +554,19 @@ def _ppl_eval(config, logger, tokenizer):
 def _train(config, logger, tokenizer):
   logger.info('Starting Training.')
   
-  # Create JSON logger as primary logger - use hydra.run.dir as save directory
+  # Create TensorBoard logger - use hydra.run.dir as save directory
   experiment_name = config.get('experiment_name', 'mdlm_training')
   # Use hydra's current working directory (which is hydra.run.dir due to chdir: true)
-  save_dir = os.getcwd()
-  json_logger = LightningJSONLogger(
+  save_dir = os.path.join(os.getcwd(), 'tensorboard_logs')
+  tb_logger = TensorBoardLogger(
     save_dir=save_dir,
-    experiment_name=experiment_name,
-    version=config.get('version', '0'),
-    update_freq=config.get('plot_update_freq', 10)  # Update plots every 10 steps by default (less frequent)
+    name=experiment_name,
+    version=config.get('version', None),  # None means auto-increment
+    default_hp_metric=False
   )
   
-  # Log configuration
-  json_logger.log_config(omegaconf.OmegaConf.to_object(config))
+  # Log configuration as hyperparameters
+  tb_logger.log_hyperparams(omegaconf.OmegaConf.to_container(config, resolve=True))
 
   if (config.checkpointing.resume_from_ckpt
       and config.checkpointing.resume_ckpt_path is not None
@@ -589,13 +589,13 @@ def _train(config, logger, tokenizer):
   model = diffusion.Diffusion(
     config, tokenizer=valid_ds.tokenizer)
 
-  # Setup logger - use only JSON logger
+  # Setup logger - use TensorBoard logger
   trainer = hydra.utils.instantiate(
     config.trainer,
     default_root_dir=os.getcwd(),
     callbacks=callbacks,
     strategy=hydra.utils.instantiate(config.strategy),
-    logger=json_logger)
+    logger=tb_logger)
 
   state_dict = None
   if ckpt_path:
@@ -611,11 +611,11 @@ def _train(config, logger, tokenizer):
   else:
     print('Training from scratch')
   
-  try:
-    trainer.fit(model, train_ds, valid_ds)
-  finally:
-    # Ensure plots are finalized even if training is interrupted
-    json_logger.finalize()
+  # Train the model
+  trainer.fit(model, train_ds, valid_ds)
+  
+  # TensorBoard automatically finalizes, no need for explicit finalize() call
+  logger.info(f'TensorBoard logs saved to: {tb_logger.log_dir}')
 
 
 @hydra.main(version_base=None, config_path='configs',

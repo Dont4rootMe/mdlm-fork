@@ -774,15 +774,23 @@ class Diffusion(L.LightningModule):
       if all_first_step_levenshteins:
         avg_first_step_lev = sum(all_first_step_levenshteins) / len(all_first_step_levenshteins)
         self.log('val/first_step_levenshtein_sampling', avg_first_step_lev, on_epoch=True, on_step=False, sync_dist=True)
-      if self.trainer.global_rank == 0 and hasattr(
-        self.trainer.logger, 'log_table'):
-        # Log the last generated samples
-        text_samples = text_samples[
-          : self.config.sampling.num_sample_log]
-        self.trainer.logger.log_table(
-          key=f'samples@global_step{self.global_step}',
-          columns=['Generated Samples'],
-          data=[[s] for s in text_samples])
+      
+      # Log generated samples to TensorBoard as text
+      if self.trainer.global_rank == 0 and self.trainer.logger is not None:
+        try:
+          text_samples_to_log = text_samples[: self.config.sampling.num_sample_log]
+          # Log each sample as text with TensorBoard
+          samples_text = '\n\n---\n\n'.join([f"Sample {i+1}:\n{s}" for i, s in enumerate(text_samples_to_log)])
+          self.trainer.logger.experiment.add_text(
+            'generated_samples',
+            samples_text,
+            global_step=self.global_step
+          )
+        except Exception as e:
+          # Fallback if TensorBoard text logging fails
+          print(f"Warning: Failed to log text samples to TensorBoard: {e}")
+          # Still log the number of samples generated
+          self.log('val/num_samples_generated', len(text_samples_to_log), on_epoch=True, on_step=False)
       if self.config.eval.compute_generative_perplexity:
         self.log('val/gen_ppl',
                  self.gen_ppl_metric,

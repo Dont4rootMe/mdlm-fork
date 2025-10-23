@@ -6,7 +6,7 @@ defaults:
   - /strategy: ddp
   - /noise: loglinear
   - /lr_scheduler: constant_warmup
-  - /logging: json
+  - /logging: tensorboard
   - /sub_conditioning: disabled
   - /vae_encoder: vae.yaml
 
