@@ -495,19 +495,17 @@ def get_dataset(
 
 
 def get_tokenizer(config):
-  if config.vae_encoder.enabled:
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-      config.vae_encoder.latent_encoder.model.text_encoder)
+  if config.data.tokenizer_name_or_path == 'text8':
+    tokenizer = Text8Tokenizer()
+  elif config.data.tokenizer_name_or_path == 'bert-base-uncased':
+    tokenizer = transformers.BertTokenizer.\
+      from_pretrained('bert-base-uncased')
   else:
-    if config.data.tokenizer_name_or_path == 'text8':
-      tokenizer = Text8Tokenizer()
-    elif config.data.tokenizer_name_or_path == 'bert-base-uncased':
-      tokenizer = transformers.BertTokenizer.\
-        from_pretrained('bert-base-uncased')
-    else:
-      tokenizer = transformers.AutoTokenizer.from_pretrained(
-        config.data.tokenizer_name_or_path)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+      config.data.tokenizer_name_or_path)
+  
   print(f"tokenizer: {tokenizer}")
+  
   if (isinstance(tokenizer, transformers.GPT2TokenizerFast)
       or isinstance(tokenizer, transformers.GPT2Tokenizer)):
     tokenizer._tokenizer.post_processor = tokenizers.processors.BertProcessing(

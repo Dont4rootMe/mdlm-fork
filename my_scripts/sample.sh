@@ -1,14 +1,14 @@
 # for temp in 4 8 10000; do
 
 REMASKATOR_CHECKPOINT_PATH=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/remaskator_for_vae.pthnone
-CHECKPOINT_PATH=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/attention/dit_attention_changed_scheduler.ckpt
+CHECKPOINT_PATH=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/attention/new_vae_dit_attention.ckpt
 
 # /mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/attention/dit_attention_changed_scheduler.ckpt
 
 # /mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/pos_embed/dit_pos_embed_changed_scheduler.ckpt
 
 
-ROOT_RESULTS_DIR=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/results/attention_changed_scheduler/nucleus_10
+ROOT_RESULTS_DIR=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/results/attention_cond
 mkdir -p ${ROOT_RESULTS_DIR}
 
 # ddpm_cache / remaskator 

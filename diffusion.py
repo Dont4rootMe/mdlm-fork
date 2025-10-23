@@ -266,6 +266,11 @@ class Diffusion(L.LightningModule):
         self.backbone = models.dit_positional_condition.DIT(
           self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
         )
+      elif self.config.TYPE_OF_CONDITIONING == 'vae_implementation':
+        print("Using vae implementation conditioning")
+        self.backbone = models.dit_vae_condition.DIT(
+          self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
+        )
       else:
         print("Using dit conditioning")
         self.backbone = models.dit.DIT(
@@ -1961,14 +1966,14 @@ class Diffusion(L.LightningModule):
     text_samples = self.tokenizer.batch_decode(indices, skip_special_tokens=True)
 
     # Logging: write the decoded texts to a file
-    log_dir = "./embedding_logs"
-    os.makedirs(log_dir, exist_ok=True)
-    text_log_path = os.path.join(log_dir, "texts.log")
-    with open(text_log_path, "a", encoding="utf-8") as f:
-      for text, tokenized_text in zip(text_samples, indices):
-        f.write(text.replace("\n", "\\n") + "\n")
-        f.write(str(tokenized_text.tolist()) + "\n")
-        f.write("=" * 100 + "\n")
+    # log_dir = "./embedding_logs"
+    # os.makedirs(log_dir, exist_ok=True)
+    # text_log_path = os.path.join(log_dir, "texts.log")
+    # with open(text_log_path, "a", encoding="utf-8") as f:
+    #   for text, tokenized_text in zip(text_samples, indices):
+    #     f.write(text.replace("\n", "\\n") + "\n")
+    #     f.write(str(tokenized_text.tolist()) + "\n")
+    #     f.write("=" * 100 + "\n")
 
     # Get text embeddings
     text_embeddings = self.text_embedder(text_samples)
@@ -1981,16 +1986,16 @@ class Diffusion(L.LightningModule):
       text_embeddings = text_embeddings + noise_std * torch.randn_like(text_embeddings)
 
     # Logging: write the embeddings to a file
-    emb_log_path = os.path.join(log_dir, "embeddings.log")
-    with open(emb_log_path, "a", encoding="utf-8") as f:
-      if isinstance(text_embeddings, torch.Tensor):
-        emb_np = text_embeddings.detach().cpu().to(torch.float32).numpy()
-        for emb in emb_np:
-          f.write(" ".join([f"{x:.6f}" for x in emb.flatten()]) + "\n")
-      else:
-        # If not a tensor, just str() it
-        f.write(str(text_embeddings) + "\n")      
-      f.write("=" * 100 + "\n")
+    # emb_log_path = os.path.join(log_dir, "embeddings.log")
+    # with open(emb_log_path, "a", encoding="utf-8") as f:
+    #   if isinstance(text_embeddings, torch.Tensor):
+    #     emb_np = text_embeddings.detach().cpu().to(torch.float32).numpy()
+    #     for emb in emb_np:
+    #       f.write(" ".join([f"{x:.6f}" for x in emb.flatten()]) + "\n")
+    #   else:
+    #     # If not a tensor, just str() it
+    #     f.write(str(text_embeddings) + "\n")      
+    #   f.write("=" * 100 + "\n")
 
     # Ensure embeddings are on the same device as indices (safety check)
     if isinstance(text_embeddings, torch.Tensor):

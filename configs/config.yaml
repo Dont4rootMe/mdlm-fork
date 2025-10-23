@@ -21,7 +21,7 @@ T: 0  # 0 (continuous time) / 1000
 subs_masking: False
 
 
-TYPE_OF_CONDITIONING: 'attention'  # attention / pos_embedding / dit
+TYPE_OF_CONDITIONING: 'vae_implementation'  # attention / pos_embedding / vae_implementation / dit
 
 
 seed: 2

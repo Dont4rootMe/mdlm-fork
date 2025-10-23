@@ -1,0 +1,15 @@
+--- a/diffusion.py
++++ b/diffusion.py
+@@ -217,6 +217,11 @@ class Diffusion(L.LightningModule):
+         
+         self.text_embedder = VAEEncoder(self.config.vae_encoder)
+         self.cond_dim = self.config.vae_encoder.latent_encoder.latent.dim
++        
++        # Freeze VAEEncoder parameters (it's a pretrained model)
++        for p in self.text_embedder.parameters():
++          p.requires_grad = False
++        self.text_embedder.eval()
+         
+       else:
+         self.text_embedder = embeddings.TextEmbedder(
+
