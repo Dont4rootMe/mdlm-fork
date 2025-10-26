@@ -1,17 +1,29 @@
-name: mdlm
+name: ai_lerobot_v3
 channels:
-  - pytorch
-  - anaconda
   - nvidia
+  - pytorch
+  - conda-forge
   - defaults
+
 dependencies:
-  - cuda-nvcc=12.4.99
+  # Базовая среда
+  - python=3.10
+  - pip
+  - cuda-toolkit=12.4        # даёт nvcc и dev headers/libs внутрь env
+  - ninja                    # нужен для быстрой сборки flash-attn
+
+  # PyTorch стек с CUDA 12.4 под Hopper (H100)
+  - pytorch=2.5.1
+  - torchvision=0.20.1
+  - torchaudio=2.5.1
+  - pytorch-cuda=12.4        # подтягивает cudart/cuBLAS/cuDNN 12.4 совместимый с pytorch
+
+  # Интерактив/ноутбуки из твоего файла
   - jupyter=1.0.0
-  - pip=23.3.1
-  - python=3.9
-  - pytorch-cuda=12.1
+  - notebook=7.1.1
+
+  # Остальные зависимости из твоего исходного requirements.yaml (pip-раздел) :contentReference[oaicite:2]{index=2}
   - pip:
-      - causal-conv1d==1.1.3.post1
       - datasets==2.18.0
       - einops==0.7.0
       - fsspec==2024.2.0
@@ -20,9 +32,7 @@ dependencies:
       - hydra-core==1.3.2
       - ipdb==0.13.13
       - lightning==2.2.1
-      - mamba-ssm==1.1.4
       - mauve-text==0.4.0
-      - notebook==7.1.1
       - nvitop==1.3.2
       - omegaconf==2.3.0
       - packaging==23.2
@@ -32,6 +42,10 @@ dependencies:
       - scikit-learn==1.4.0
       - timm==0.9.16
       - transformers==4.38.2
-      - triton==2.2.0
       - wandb==0.13.5
-      - flash-attn==2.5.6
+      # Важно: я ИСКЛЮЧАЮ triton==2.2.0.
+      # Причина: PyTorch 2.5.x приносит свой совместимый Triton под H100.
+      # Жёсткая принудительная установка старого внешнего triton==2.2.0
+      # часто ломает ядра и матмулы на Hopper.
+      # Если тебе критично зафиксировать triton==2.2.0 вручную,
+      # ты можешь добавить эту строку обратно сюда, но это риск.

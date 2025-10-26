@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/main.py", line 7, in <module>
+    import fsspec
+  File "/home/jovyan/shares/SR006.nfs2/micromamba/envs/af_gr00t/lib/python3.10/site-packages/fsspec/__init__.py", line 8, in <module>
+    from .exceptions import FSTimeoutError
+  File "/home/jovyan/shares/SR006.nfs2/micromamba/envs/af_gr00t/lib/python3.10/site-packages/fsspec/exceptions.py", line 5, in <module>
+    import asyncio
+  File "/home/jovyan/shares/SR006.nfs2/micromamba/envs/af_gr00t/lib/python3.10/asyncio/__init__.py", line 42, in <module>
+    from .unix_events import *  # pragma: no cover
+  File "/home/jovyan/shares/SR006.nfs2/micromamba/envs/af_gr00t/lib/python3.10/asyncio/unix_events.py", line 23, in <module>
+    from . import selector_events
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 879, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 975, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1074, in get_data
+KeyboardInterrupt

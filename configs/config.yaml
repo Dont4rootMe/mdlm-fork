@@ -11,6 +11,7 @@ defaults:
   - /vae_encoder: vae.yaml
 
 experiment_name: 'mdlm_training'
+tensorboard_logs: '/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/logs'
 
 mode: train  # train / ppl_eval / sample_eval
 diffusion: absorbing_state
@@ -21,7 +22,7 @@ T: 0  # 0 (continuous time) / 1000
 subs_masking: False
 
 
-TYPE_OF_CONDITIONING: 'vae_implementation'  # attention / pos_embedding / vae_implementation / dit
+TYPE_OF_CONDITIONING: 'vae_implementation'  # attention / pos_embedding / vae_implementation / dit / original_vae_decoder
 
 
 seed: 2

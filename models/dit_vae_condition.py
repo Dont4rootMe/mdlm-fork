@@ -634,11 +634,6 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
   def __init__(self, config, vocab_size: int, cond_dim: int = None, *args, **kwargs):
     super().__init__()
     
-    print('\n\n============\nUNUSED ARGS:')
-    print(args)
-    print(kwargs)
-    print('============\n')
-    
     if type(config) == dict:
       config = omegaconf.OmegaConf.create(config)
   

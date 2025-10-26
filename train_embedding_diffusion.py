@@ -62,7 +62,7 @@ def main(config):
     print(f"WandB logger initialized for experiment: {experiment_name}")
   else:
     # Default to JSON logger
-    print('\n\n\n', config.checkpointing.save_dir, '\n\n\n')
+    # print('\n\n\n', config.checkpointing.save_dir, '\n\n\n')
     json_logger = LightningJSONLogger(
       save_dir=config.checkpointing.save_dir,
       experiment_name=experiment_name

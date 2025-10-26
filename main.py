@@ -554,10 +554,10 @@ def _ppl_eval(config, logger, tokenizer):
 def _train(config, logger, tokenizer):
   logger.info('Starting Training.')
   
-  # Create TensorBoard logger - use hydra.run.dir as save directory
+  # Create TensorBoard logger - use paths from config
   experiment_name = config.get('experiment_name', 'mdlm_training')
-  # Use hydra's current working directory (which is hydra.run.dir due to chdir: true)
-  save_dir = os.path.join(os.getcwd(), 'tensorboard_logs')
+  # Use tensorboard_logs path from config.yaml
+  save_dir = config.get('tensorboard_logs', os.path.join(os.getcwd(), 'tensorboard_logs'))
   tb_logger = TensorBoardLogger(
     save_dir=save_dir,
     name=experiment_name,

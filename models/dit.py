@@ -426,9 +426,9 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     if type(config) == dict:
       config = omegaconf.OmegaConf.create(config)
 
-    print('\n\n\n\n\n\n')
-    print(use_residual_modulation, use_weighted_sum, 
-          '\n\n\n\n\n\n')
+    # print('\n\n\n\n\n\n')
+    # print(use_residual_modulation, use_weighted_sum, 
+    #       '\n\n\n\n\n\n')
   
     self.config = config
     self.vocab_size = vocab_size
@@ -440,7 +440,7 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     self.sigma_map = TimestepEmbedder(config.model.cond_dim)
     if cond_dim is not None:
       self.cond_embed = nn.Linear(cond_dim, config.model.cond_dim_embedding)
-      print(f"\n\n\ncond_embed: {config.model.cond_dim_embedding}\n\n\n")
+      # print(f"\n\n\ncond_embed: {config.model.cond_dim_embedding}\n\n\n")
     else:
       self.cond_embed = None
     self.rotary_emb = Rotary(

@@ -8,6 +8,9 @@ from torch import nn
 class VAEEncoder(nn.Module):
     def __init__(self, cfg: DictConfig):
         super().__init__()
+        
+        print('\n\n\n\nusing VAEEncoder: ', cfg, '\n\n\n\n')
+        
         self.device = None
         self.cfg = cfg
         self.model = Encoder(cfg.latent_encoder)
@@ -47,4 +50,4 @@ class VAEEncoder(nn.Module):
         return embeddings[:, 0, :] # take embedding of BOS
     
     def forward(self, texts: list[str]) -> torch.Tensor:
-        return self.encode(texts)
+        return self.encode(texts).detach()

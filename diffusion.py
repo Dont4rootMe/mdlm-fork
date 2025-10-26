@@ -66,6 +66,71 @@ def _compute_levenshtein_distance(seq1, seq2):
   return matrix[len(seq1)][len(seq2)]
 
 
+def _compute_text_based_accuracy_and_levenshtein(tokenizer, predicted_tokens, reference_tokens):
+  """Compute accuracy and Levenshtein distance by comparing decoded texts.
+  
+  This is more accurate for VAE decoder as it accounts for tokenization differences.
+  
+  Args:
+    tokenizer: The tokenizer used to decode tokens
+    predicted_tokens: Tensor of shape (batch_size, seq_len) with predicted token ids
+    reference_tokens: Tensor of shape (batch_size, seq_len) with reference token ids
+    
+  Returns:
+    tuple: (mean_accuracy, mean_levenshtein_distance) across batch
+  """
+  if predicted_tokens.shape != reference_tokens.shape:
+    return 0.0, 0.0
+    
+  batch_size = predicted_tokens.shape[0]
+  total_accuracy = 0.0
+  total_levenshtein = 0.0
+  valid_pairs = 0
+  
+  for i in range(batch_size):
+    pred_tokens = predicted_tokens[i].cpu().tolist()
+    ref_tokens = reference_tokens[i].cpu().tolist()
+    
+    # Decode to text and re-tokenize for fair comparison
+    try:
+      pred_text = tokenizer.decode(pred_tokens, skip_special_tokens=True)
+      ref_text = tokenizer.decode(ref_tokens, skip_special_tokens=True)
+      
+      # Re-tokenize both texts to get clean token sequences
+      pred_clean = tokenizer.encode(pred_text, add_special_tokens=False)
+      ref_clean = tokenizer.encode(ref_text, add_special_tokens=False)
+      
+      if len(ref_clean) == 0:
+        continue
+        
+      # Compute accuracy on clean tokens
+      min_length = min(len(pred_clean), len(ref_clean))
+      matches = sum(1 for j in range(min_length) if pred_clean[j] == ref_clean[j])
+      
+      # Penalize length differences
+      length_penalty = abs(len(pred_clean) - len(ref_clean))
+      total_positions = max(len(pred_clean), len(ref_clean))
+      pair_accuracy = (matches - length_penalty) / total_positions if total_positions > 0 else 0.0
+      pair_accuracy = max(0.0, pair_accuracy)  # Ensure non-negative
+      
+      # Compute Levenshtein distance on clean tokens
+      levenshtein_dist = _compute_levenshtein_distance(pred_clean, ref_clean)
+      normalized_levenshtein = levenshtein_dist / len(ref_clean) if len(ref_clean) > 0 else 0.0
+      
+      total_accuracy += pair_accuracy
+      total_levenshtein += normalized_levenshtein
+      valid_pairs += 1
+      
+    except Exception:
+      # Fallback to token-based comparison if decoding fails
+      continue
+  
+  if valid_pairs > 0:
+    return total_accuracy / valid_pairs, total_levenshtein / valid_pairs
+  else:
+    return 0.0, 0.0
+
+
 def _compute_first_step_accuracy_and_levenshtein(tokenizer, predicted_tokens, reference_tokens):
   """Compute token-level accuracy and Levenshtein distance for first step predictions.
   
@@ -105,10 +170,16 @@ def _compute_first_step_accuracy_and_levenshtein(tokenizer, predicted_tokens, re
       continue
       
     # Compute token-level accuracy for this pair
-    min_length = min(len(pred_tokens), len(ref_tokens))
-    if min_length > 0:
-      # Count matching tokens (prefix accuracy)
-      matches = sum(1 for j in range(min_length) if pred_tokens[j] == ref_tokens[j])
+    if len(ref_tokens) > 0:
+      # Pad shorter sequence with a special "mismatch" token to ensure fair comparison
+      max_length = max(len(pred_tokens), len(ref_tokens))
+      
+      # Extend sequences to same length (shorter one gets mismatches)
+      pred_extended = pred_tokens + [-1] * (max_length - len(pred_tokens))
+      ref_extended = ref_tokens + [-1] * (max_length - len(ref_tokens))
+      
+      # Count exact matches at each position
+      matches = sum(1 for j in range(max_length) if pred_extended[j] == ref_extended[j])
       pair_accuracy = matches / len(ref_tokens)  # Normalize by reference length
     else:
       pair_accuracy = 0.0
@@ -193,6 +264,9 @@ class Diffusion(L.LightningModule):
     self.save_hyperparameters()
     self.config = config
     
+    
+    print('\n\n\n\nusing tokenizer: ', tokenizer, '\n\n\n\n')
+    
     self.change_time_scheduler = self.config.training.change_scheduler
 
     self.tokenizer = tokenizer
@@ -270,6 +344,12 @@ class Diffusion(L.LightningModule):
         print("Using vae implementation conditioning")
         self.backbone = models.dit_vae_condition.DIT(
           self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
+        )
+      elif self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+        print("Using original vae decoder conditioning")
+        self.backbone = models.original_vae_decoder.Decoder(
+          self.config, vocab_size=self.vocab_size, cond_dim=self.cond_dim,
+          mask_token_id=self.mask_index
         )
       else:
         print("Using dit conditioning")
@@ -569,9 +649,16 @@ class Diffusion(L.LightningModule):
   def forward(self, x, sigma, condition, curr_embed=None):
     """Returns log score."""
 
-    sigma = self._process_sigma(sigma)
+    # For original_vae_decoder, pass sigma=None and curr_embed=None
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      processed_sigma = None
+      processed_curr_embed = None
+    else:
+      processed_sigma = self._process_sigma(sigma)
+      processed_curr_embed = curr_embed
+    
     with torch.cuda.amp.autocast(dtype=torch.float32):
-      logits = self.backbone(x, sigma, condition, curr_embed=curr_embed)
+      logits = self.backbone(x, processed_sigma, condition, curr_embed=processed_curr_embed)
     
     if self.parameterization == 'subs':
       return self._subs_parameterization(logits=logits,
@@ -647,48 +734,72 @@ class Diffusion(L.LightningModule):
     if self.parameterization == 'ar':
       return  # Skip for autoregressive models
     
-    # Sample a high noise level (close to 1.0) for first step
     batch_size = x0.shape[0]
-    t = torch.ones(batch_size, device=x0.device) * 0.99  # High noise level
     
-    # Get condition embeddings
-    condition = None
-    if self.config.text_embedder.use_text_embedder and self.text_embedder is not None:
-      condition = self.indices_to_text_embeddings(x0)
-    
-    # Create noisy version (mostly masked)
-    sigma, _ = self.noise(t)
-    unet_conditioning = sigma[:, None]
-    move_chance = 1 - torch.exp(-sigma[:, None])
-    xt = self.q_xt(x0, move_chance)
-    
-    # Get current embeddings for sub conditioning
-    curr_embed = None
-    if True:  # Same condition as in _sample method
-      curr_embed = self.indices_to_text_embeddings(xt)
+    # Special handling for original_vae_decoder (single-step denoising from condition)
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      # For original_vae_decoder: single-step denoising from fully masked input
+      t = torch.ones(batch_size, device=x0.device) * 0.999999
+      condition = self.indices_to_text_embeddings(x0)  # Condition from ground truth
+      
+      # Create fully masked input (what decoder receives)
+      xt = torch.full_like(x0, self.mask_index)
+      unet_conditioning = None
+      curr_embed = None
+    else:
+      # Standard multi-step diffusion: sample a high noise level for first step
+      t = torch.ones(batch_size, device=x0.device) * 0.99
+      
+      # Get condition embeddings
+      condition = None
+      if self.config.text_embedder.use_text_embedder and self.text_embedder is not None:
+        condition = self.indices_to_text_embeddings(x0)
+      
+      # Create noisy version (mostly masked)
+      sigma, _ = self.noise(t)
+      unet_conditioning = sigma[:, None]
+      move_chance = 1 - torch.exp(-sigma[:, None])
+      xt = self.q_xt(x0, move_chance)
+      
+      # Get current embeddings for sub conditioning
+      curr_embed = None
+      if True:
+        curr_embed = self.indices_to_text_embeddings(xt)
     
     # Predict x0 from xt
     with torch.cuda.amp.autocast(dtype=torch.float32):
       logits = self.backbone(xt, unet_conditioning, condition, curr_embed=curr_embed)
     
     # Get predicted tokens (argmax)
-    if self.parameterization == 'subs':
-      # For subs parameterization, apply the same processing as in forward
-      logits[:, :, self.mask_index] += self.neg_infinity
-      logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
-      unmasked_indices = (xt != self.mask_index)
-      logits[unmasked_indices] = self.neg_infinity
-      logits[unmasked_indices, xt[unmasked_indices]] = 0
-    elif self.parameterization == 'd3pm':
-      if self.subs_masking:
+    # For original_vae_decoder, use raw logits (no parameterization processing)
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      # VAE decoder returns raw logits, just take argmax
+      predicted_tokens = logits.argmax(dim=-1)
+    else:
+      # Apply parameterization processing for other models
+      if self.parameterization == 'subs':
+        # For subs parameterization, apply the same processing as in forward
         logits[:, :, self.mask_index] += self.neg_infinity
-      logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
-    
-    predicted_tokens = logits.argmax(dim=-1)
+        logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
+        unmasked_indices = (xt != self.mask_index)
+        logits[unmasked_indices] = self.neg_infinity
+        logits[unmasked_indices, xt[unmasked_indices]] = 0
+      elif self.parameterization == 'd3pm':
+        if self.subs_masking:
+          logits[:, :, self.mask_index] += self.neg_infinity
+        logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
+      
+      predicted_tokens = logits.argmax(dim=-1)
     
     # Compute metrics
-    accuracy, levenshtein = _compute_first_step_accuracy_and_levenshtein(
-      self.tokenizer, predicted_tokens, x0)
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      # Use text-based comparison for VAE decoder (more accurate)
+      accuracy, levenshtein = _compute_text_based_accuracy_and_levenshtein(
+        self.tokenizer, predicted_tokens, x0)
+    else:
+      # Use token-based comparison for other models
+      accuracy, levenshtein = _compute_first_step_accuracy_and_levenshtein(
+        self.tokenizer, predicted_tokens, x0)
     
     # Update metrics individually
     self.valid_first_step_metrics['val/first_step_accuracy'].update(
@@ -712,7 +823,7 @@ class Diffusion(L.LightningModule):
 
   def training_step(self, batch, batch_idx):
     loss = self._compute_loss(batch, prefix='train')
-    self.log(name='trainer/loss',
+    self.log(name='train/loss',
              value=loss.item(),
              on_step=True,
              on_epoch=False,
@@ -752,11 +863,12 @@ class Diffusion(L.LightningModule):
          and not self.parameterization == 'ar'):
       # TODO(justin): implement sampling and kv cache for AR
       samples, text_samples = None, None
+      reference_texts = None
       all_first_step_accuracies = []
       all_first_step_levenshteins = []
       for _ in range(
         self.config.sampling.num_sample_batches):
-        samples, _, first_step_acc, first_step_lev = self._sample()
+        samples, reference_texts, first_step_acc, first_step_lev = self._sample()
         # Collect first step metrics if available
         if first_step_acc is not None:
           all_first_step_accuracies.append(first_step_acc)
@@ -786,6 +898,40 @@ class Diffusion(L.LightningModule):
             samples_text,
             global_step=self.global_step
           )
+          
+          # Log input and output texts in 'texts' group
+          if reference_texts is not None:
+            reference_texts_to_log = reference_texts[: self.config.sampling.num_sample_log]
+            generated_texts_to_log = text_samples[: self.config.sampling.num_sample_log]
+            
+            # Log input texts (encoder inputs)
+            input_texts = '\n\n---\n\n'.join([f"Input {i+1}:\n{s if s is not None else '[No reference]'}" 
+                                              for i, s in enumerate(reference_texts_to_log)])
+            self.trainer.logger.experiment.add_text(
+              'texts/input_texts',
+              input_texts,
+              global_step=self.global_step
+            )
+            
+            # Log output texts (decoder outputs)
+            output_texts = '\n\n---\n\n'.join([f"Output {i+1}:\n{s}" 
+                                               for i, s in enumerate(generated_texts_to_log)])
+            self.trainer.logger.experiment.add_text(
+              'texts/output_texts',
+              output_texts,
+              global_step=self.global_step
+            )
+            
+            # Log paired input-output for easy comparison
+            paired_texts = '\n\n---\n\n'.join([
+              f"Pair {i+1}:\nInput: {ref if ref is not None else '[No reference]'}\n - - - \nOutput: {gen}"
+              for i, (ref, gen) in enumerate(zip(reference_texts_to_log, generated_texts_to_log))
+            ])
+            self.trainer.logger.experiment.add_text(
+              'texts/paired_texts',
+              paired_texts,
+              global_step=self.global_step
+            )
         except Exception as e:
           # Fallback if TensorBoard text logging fails
           print(f"Warning: Failed to log text samples to TensorBoard: {e}")
@@ -822,7 +968,7 @@ class Diffusion(L.LightningModule):
       'scheduler': scheduler,
       'interval': 'step',
       'monitor': 'val/loss',
-      'name': 'trainer/lr',
+      'name': 'train/learning_rate',
     }
     return [optimizer], [scheduler_dict]
 
@@ -948,7 +1094,7 @@ class Diffusion(L.LightningModule):
     for each sample in the batch, the first lens[i] tokens are set to self.mask_index,
     the rest are set to self.tokenizer.pad_token_id.
     """
-    if lens is None:
+    if lens is None or self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
       return self.mask_index * torch.ones(
         *batch_dims, dtype=torch.int64)
     else:
@@ -1389,6 +1535,9 @@ class Diffusion(L.LightningModule):
     # Lightning auto-casting is not working in this method for some reason
     if num_steps is None:
       num_steps = self.config.sampling.steps
+      
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      num_steps = 1
 
     # sample condition based on config
     if self.sample_embeddings_from == 'train':
@@ -1487,15 +1636,22 @@ class Diffusion(L.LightningModule):
     # Variables to store first step metrics
     first_step_accuracy = None
     first_step_levenshtein = None
-    
+
     for i in range(num_steps):
       t = timesteps[i] * torch.ones(
         x.shape[0], 1, device=self.device)
+      
+      if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+        t = torch.ones(x.shape[0], 1, device=self.device) * 0.999999
+        
       # Use condition only while i < cond_until_step
       step_condition = condition if (condition is not None and i < cond_until_step) else None
 
       # Update curr_embed for sub conditioning at each step
-      if True:
+      # For original_vae_decoder, curr_embed is not used (decoder ignores it)
+      if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+        curr_embed = None
+      elif True:
         curr_embed = self.indices_to_text_embeddings(x)
 
       # Compute first step metrics (only on first iteration and if we have reference texts)
@@ -1527,6 +1683,12 @@ class Diffusion(L.LightningModule):
             reference_tokens = torch.tensor(reference_token_lists, device=x.device, dtype=torch.long)
             first_step_accuracy, first_step_levenshtein = _compute_first_step_accuracy_and_levenshtein(
               self.tokenizer, predicted_x0, reference_tokens)
+        
+      if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+        with torch.no_grad():
+          log_p_x0 = self.forward(x, None, step_condition, curr_embed=curr_embed)
+          x = _sample_categorical(log_p_x0.exp())
+          break
 
       # Optionally update the condition embedding via EMA using a sampled x0
       if (i in update_steps) and (step_condition is not None):
@@ -1567,7 +1729,7 @@ class Diffusion(L.LightningModule):
       # Record state after update at this timestep t
       _record_state(x, t)
 
-    if self.config.sampling.noise_removal:
+    if self.config.sampling.noise_removal and not self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
       t = timesteps[-1] * torch.ones(x.shape[0], 1,
                                      device=self.device)
       final_condition = condition if (condition is not None and num_steps <= cond_until_step) else None
@@ -1712,6 +1874,9 @@ class Diffusion(L.LightningModule):
       idx = perm[:half_n]
       _eps_t[idx] = 0.999
     
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      _eps_t = torch.ones(n, device=device) * 0.999999
+    
     if self.antithetic_sampling:
       offset = torch.arange(n, device=device) / n
       _eps_t = (_eps_t / n + offset) % 1
@@ -1791,7 +1956,11 @@ class Diffusion(L.LightningModule):
 
     xt = self.q_xt(x0, move_chance)
     
-    if True:
+    # For original_vae_decoder, curr_embed is not used (decoder ignores it)
+    # and computing embeddings from noisy/masked tokens is not meaningful
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      curr_embed = None
+    elif True:
       curr_embed = self.indices_to_text_embeddings(xt)
     else:
       curr_embed = None

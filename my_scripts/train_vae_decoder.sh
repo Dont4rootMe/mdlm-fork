@@ -1,0 +1,24 @@
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+python main.py \
+  TYPE_OF_CONDITIONING='original_vae_decoder' \
+  model=small \
+  mode=train \
+  data=openwebtext-split \
+  parameterization=subs \
+  model.length=129 \
+  eval.compute_generative_perplexity=True \
+  sampling.num_sample_batches=8 \
+  sampling.steps=128 \
+  checkpointing.resume_from_ckpt=False \
+  loader.global_batch_size=2048 \
+  loader.batch_size=256 \
+  loader.eval_batch_size=128 \
+  trainer.val_check_interval=1500 \
+  trainer.max_steps=1500000 \
+  training.change_scheduler=true \
+  eval.generate_samples=True \
+  data.wrap=False \
+  vae_encoder.enabled=true \
+  sub_conditioning.enabled=false \
+  experiment_name='original_vae_decoder'
+  # +embedding_cache_dir=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/embedding_cache \
