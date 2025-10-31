@@ -1,7 +1,7 @@
 enabled: false
 
 latent_encoder:
-  checkpoint: /mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/vae_encoder_new.pth
+  checkpoint: /mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/wall-x-lerobot/checkpoints/subchck/total_new/vae.pth
 
   attention:
     head_size: 64

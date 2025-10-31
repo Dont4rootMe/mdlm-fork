@@ -5,6 +5,7 @@ import numpy as np
 from copy import deepcopy
 from omegaconf import DictConfig
 from transformers import AutoModel
+import os
 
 from .blocks import AbsolutePositionalEmbedding, FeedForwardNetwork
 from .latent_attention import LatentAttention
@@ -68,6 +69,82 @@ def get_embedding():
     mask_embedding = bert_model.embeddings.word_embeddings.weight[mask_token_id].detach().clone()
     
     return mask_embedding
+
+
+def load_compatible_weights(model, checkpoint_path):
+    """
+    Загружает веса из чекпоинта, сопоставляя названия слоев и проверяя размерности.
+    
+    Args:
+        model: PyTorch модель для инициализации
+        checkpoint_path: путь к чекпоинту
+    
+    Returns:
+        dict: статистика загрузки (loaded, skipped, missing)
+    """
+    if not os.path.exists(checkpoint_path):
+        print(f"Checkpoint not found: {checkpoint_path}")
+        return {"loaded": 0, "skipped": 0, "missing": 0}
+    
+    # Загружаем state_dict из чекпоинта
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    pretrained_state_dict = checkpoint.get('decoder', {})
+    
+    if not pretrained_state_dict:
+        print("No 'decoder' key found in checkpoint")
+        return {"loaded": 0, "skipped": 0, "missing": 0}
+    
+    # Получаем state_dict текущей модели
+    model_state_dict = model.state_dict()
+    
+    # Статистика
+    loaded_count = 0
+    skipped_count = 0
+    size_mismatch_count = 0
+    
+    print("\n" + "="*80)
+    print("Loading pretrained weights for decoder...")
+    print("="*80)
+    
+    # Проходим по всем параметрам модели
+    for model_key, model_param in model_state_dict.items():
+        model_shape = model_param.shape
+        
+        # Пытаемся найти соответствующий ключ в чекпоинте
+        # Прямое совпадение
+        if model_key in pretrained_state_dict:
+            pretrained_param = pretrained_state_dict[model_key]
+            pretrained_shape = pretrained_param.shape
+            
+            # Проверяем размерности
+            if model_shape == pretrained_shape:
+                model_state_dict[model_key].copy_(pretrained_param)
+                loaded_count += 1
+                print(f"✓ Loaded: {model_key:60s} {str(model_shape):30s}")
+            else:
+                size_mismatch_count += 1
+                print(f"✗ Size mismatch: {model_key:60s} model{model_shape} vs ckpt{pretrained_shape}")
+        else:
+            skipped_count += 1
+            print(f"⊘ Not found in checkpoint: {model_key:60s} {str(model_shape):30s}")
+    
+    # Загружаем обновленный state_dict
+    model.load_state_dict(model_state_dict)
+    
+    print("="*80)
+    print(f"Summary:")
+    print(f"  Loaded: {loaded_count} parameters")
+    print(f"  Skipped (not found): {skipped_count} parameters")
+    print(f"  Skipped (size mismatch): {size_mismatch_count} parameters")
+    print(f"  Total model parameters: {len(model_state_dict)}")
+    print("="*80 + "\n")
+    
+    return {
+        "loaded": loaded_count,
+        "skipped": skipped_count,
+        "size_mismatch": size_mismatch_count,
+        "total": len(model_state_dict)
+    }
 
 
 class Decoder(nn.Module):
@@ -144,6 +221,13 @@ class Decoder(nn.Module):
         
         self.lm_head = nn.Linear(self.embedding_dim, self.vocab_size, bias=False)
         self.scale_embedding = ScaleMask()
+        
+        # Загружаем предобученные веса, если чекпоинт существует
+        if hasattr(config.vae_encoder.latent_encoder, 'checkpoint') and config.vae_encoder.latent_encoder.checkpoint:
+            checkpoint_path = config.vae_encoder.latent_encoder.checkpoint
+            load_compatible_weights(self, checkpoint_path)
+        else:
+            raise ValueError(f"Checkpoint not found: {config.vae_encoder.latent_encoder.checkpoint}")
 
     # def forward(self, encoder_latents, masked_input_ids=None, return_last_hidden_state=False):
     def forward(self, indices, sigma=None, condition=None, curr_embed=None):
