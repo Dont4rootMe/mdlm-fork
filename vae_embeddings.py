@@ -32,12 +32,48 @@ class VAEEncoder(nn.Module):
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint file not found: {ckpt_path}")
         
-        self.model.load_state_dict(torch.load(ckpt_path)['encoder'])
+        # Load checkpoint
+        checkpoint = torch.load(ckpt_path, map_location='cpu')
+        
+        # Load encoder weights
+        self.model.load_state_dict(checkpoint['encoder'])
+        
+        # Load normalization statistics for BERT embeddings
+        if 'encodings_mean' in checkpoint and 'encodings_std' in checkpoint:
+            self.encodings_mean = checkpoint['encodings_mean']
+            self.encodings_std = checkpoint['encodings_std']
+            print(f"✓ Loaded normalization statistics from checkpoint")
+        else:
+            print("⚠ Warning: No normalization statistics found in checkpoint!")
+            print("  BERT embeddings will NOT be normalized (may cause poor performance)")
+            self.encodings_mean = None
+            self.encodings_std = None
         
     def to(self, device: torch.device):
         self.device = device
         self.model.to(device)
+        # Move normalization statistics to device
+        if self.encodings_mean is not None:
+            self.encodings_mean = self.encodings_mean.to(device)
+        if self.encodings_std is not None:
+            self.encodings_std = self.encodings_std.to(device)
         return self
+    
+    def normalize_encodings(self, encodings: torch.Tensor) -> torch.Tensor:
+        """Normalize BERT encodings using mean and std statistics.
+        
+        Args:
+            encodings: torch.Tensor of shape (batch_size, sequence_length, hidden_dim)
+        
+        Returns:
+            torch.Tensor: Normalized encodings
+        """
+        if self.encodings_mean is None or self.encodings_std is None:
+            # If statistics not available, return unchanged
+            print("⚠ Warning: normalize_encodings called but statistics not available!")
+            return encodings
+        
+        return (encodings - self.encodings_mean) / self.encodings_std
         
     def encode(self, texts: list[str]) -> torch.Tensor:
         """for back compitability only"""
@@ -93,12 +129,23 @@ class VAEEncoder(nn.Module):
         tokens = {k: v.to(self.model.text_encoder.device) for k, v in tokens.items()}
 
         with torch.no_grad():
+            # Get BERT embeddings (same as in encoder_trainer.py)
+            bert_hidden_state = self.model.text_encoder(
+                input_ids=tokens["input_ids"],
+                attention_mask=tokens["attention_mask"]
+            ).last_hidden_state
+            
+            # Normalize BERT embeddings (CRITICAL!)
+            bert_hidden_state = self.normalize_encodings(bert_hidden_state)
+            
+            # Pass normalized embeddings to encoder
             embeddings = self.model(
-                tokens["input_ids"],
-                mask_tokens=tokens["attention_mask"]
+                token_ids=tokens["input_ids"],
+                mask_tokens=tokens["attention_mask"],
+                token_embeddings=bert_hidden_state  # ← NORMALIZED!
             )
         
-        return embeddings[:, 0, :] # take embedding of BOS
+        return embeddings[:, 0, :] # take embedding of first latent (BOS position)
     
     def forward(self, texts: list[str]) -> torch.Tensor:
         return self.encode(texts).detach()

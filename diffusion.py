@@ -470,6 +470,9 @@ class Diffusion(L.LightningModule):
     # Counter for how many sampling trajectories have been saved so far
     self._trajectories_saved = 0
     
+    # Initialize normalization statistics for VAE encoder (will be loaded from checkpoint)
+    self.encodings_mean = None
+    self.encodings_std = None
 
   def _validate_configuration(self):
     assert not (self.change_of_variables
@@ -554,6 +557,23 @@ class Diffusion(L.LightningModule):
     
     # Move text embedder to correct device
     self._move_text_embedder_to_device()
+    
+    # Load normalization statistics for VAE encoder if not already loaded
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder' and self.config.vae_encoder.enabled:
+      if self.encodings_mean is None or self.encodings_std is None:
+        try:
+          vae_checkpoint_path = self.config.vae_encoder.latent_encoder.checkpoint
+          if vae_checkpoint_path and os.path.exists(vae_checkpoint_path):
+            vae_checkpoint = torch.load(vae_checkpoint_path, map_location='cpu')
+            if 'encodings_mean' in vae_checkpoint:
+              self.encodings_mean = vae_checkpoint['encodings_mean'].to(self.device)
+              print(f"✓ Loaded encodings_mean from VAE checkpoint: {vae_checkpoint_path}")
+            if 'encodings_std' in vae_checkpoint:
+              self.encodings_std = vae_checkpoint['encodings_std'].to(self.device)
+              print(f"✓ Loaded encodings_std from VAE checkpoint: {vae_checkpoint_path}")
+        except Exception as e:
+          print(f"⚠ Warning: Could not load normalization statistics from VAE checkpoint: {e}")
+          print("  BERT embeddings will NOT be normalized (may affect training quality)")
     
     # Adapted from:
     # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
@@ -1975,19 +1995,39 @@ class Diffusion(L.LightningModule):
       # Get condition (encoder latents) from x0
       condition = self.indices_to_text_embeddings(x0)
       
+      # Get BERT embeddings for MSE loss target
+      bert_embeddings = self.get_bert_embeddings(x0)
+      if bert_embeddings is not None:
+        bert_embeddings = self.normalize_encodings(bert_embeddings)
+      
       # Forward pass with return_last_hidden_state=True to get hidden states
       with torch.cuda.amp.autocast(dtype=torch.float32):
-        model_output = self.backbone(
-          x0, None, condition, None
+        model_output, hidden_state_of_decoder = self.backbone(
+          x0, None, condition, None, return_last_hidden_state=True
         )
       
       # Compute cross-entropy loss
-      loss = F.cross_entropy(
+      ce_loss = F.cross_entropy(
           model_output.reshape(-1, model_output.size(-1)),  # [Batch*seq_len, dim]
           x0.reshape(-1),  # [Batch*seq_len]
           reduction='none'
       ).reshape(x0.shape)
-
+      
+      # Compute MSE loss between decoder hidden states and BERT embeddings
+      if bert_embeddings is not None:
+        # MSE loss per token
+        mse_loss = F.mse_loss(
+          hidden_state_of_decoder,  # [Batch, seq_len, hidden_dim]
+          bert_embeddings.detach(),  # [Batch, seq_len, hidden_dim]
+          reduction='none'
+        ).mean(dim=-1)  # Average over hidden dimension -> [Batch, seq_len]
+        
+        # Combine losses: CE + MSE (as in encoder_trainer.py)
+        loss = ce_loss + mse_loss
+      else:
+        # Fallback to CE loss only if BERT embeddings not available
+        loss = ce_loss
+      
       return loss
     
     condition = self.indices_to_text_embeddings(x0)
@@ -2124,6 +2164,49 @@ class Diffusion(L.LightningModule):
     entropy[masked_indices] += pos_term - neg_term + const
     return entropy
 
+  def get_bert_embeddings(self, indices, attention_mask=None):
+    """Get BERT embeddings from token indices for VAE encoder.
+    
+    Args:
+        indices: torch.Tensor of shape (batch_size, sequence_length)
+        attention_mask: torch.Tensor of shape (batch_size, sequence_length) or None
+    
+    Returns:
+        torch.Tensor: BERT hidden states (batch_size, sequence_length, hidden_dim)
+    """
+    if not hasattr(self, 'text_embedder') or self.text_embedder is None:
+      return None
+    
+    # For VAE encoder, we need to use the encoder's text_encoder (BERT)
+    if self.config.vae_encoder.enabled:
+      if attention_mask is None:
+        attention_mask = torch.ones_like(indices)
+      
+      with torch.no_grad():
+        bert_hidden_state = self.text_embedder.model.text_encoder(
+          input_ids=indices,
+          attention_mask=attention_mask
+        ).last_hidden_state
+      
+      return bert_hidden_state
+    
+    return None
+
+  def normalize_encodings(self, encodings):
+    """Normalize BERT encodings using mean and std statistics.
+    
+    Args:
+        encodings: torch.Tensor of shape (batch_size, sequence_length, hidden_dim)
+    
+    Returns:
+        torch.Tensor: Normalized encodings
+    """
+    if self.encodings_mean is None or self.encodings_std is None:
+      # If statistics not available, return unchanged
+      return encodings
+    
+    return (encodings - self.encodings_mean) / self.encodings_std
+
   def indices_to_text_embeddings(self, indices, attention_mask=None):
     """Convert batch of token indices to text embeddings.
     
@@ -2139,6 +2222,31 @@ class Diffusion(L.LightningModule):
     if self.text_embedder is None:
       return None
 
+    # For VAE encoder during training, use encoder directly to get latents
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder' and self.config.vae_encoder.enabled:
+      # Get BERT embeddings
+      bert_embeddings = self.get_bert_embeddings(indices, attention_mask)
+      if bert_embeddings is None:
+        return None
+      
+      # Normalize BERT embeddings
+      bert_embeddings = self.normalize_encodings(bert_embeddings)
+      
+      # Pass through VAE encoder to get latents
+      if attention_mask is None:
+        attention_mask = torch.ones_like(indices)
+      
+      with torch.no_grad():
+        latents = self.text_embedder.model(
+          token_ids=indices,
+          mask_tokens=attention_mask,
+          token_embeddings=bert_embeddings
+        )
+      
+      # Return first latent token (or all latents depending on config)
+      return latents[:, 0, :]  # Shape: (batch_size, latent_dim)
+    
+    # Standard path for non-VAE models
     # Convert indices to text
     text_samples = self.tokenizer.batch_decode(indices, skip_special_tokens=True)
 
