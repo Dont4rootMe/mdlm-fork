@@ -469,6 +469,7 @@ class Diffusion(L.LightningModule):
     self._validate_configuration()
     # Counter for how many sampling trajectories have been saved so far
     self._trajectories_saved = 0
+    
 
   def _validate_configuration(self):
     assert not (self.change_of_variables
@@ -660,6 +661,9 @@ class Diffusion(L.LightningModule):
     with torch.cuda.amp.autocast(dtype=torch.float32):
       logits = self.backbone(x, processed_sigma, condition, curr_embed=processed_curr_embed)
     
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      return logits
+    
     if self.parameterization == 'subs':
       return self._subs_parameterization(logits=logits,
                                          xt=x)
@@ -703,6 +707,18 @@ class Diffusion(L.LightningModule):
     return self.T * L_vb
 
   def _compute_loss(self, batch, prefix):
+    
+    # if self.trainer.global_rank == 0:
+    #   print('\n\n\n\n\n\n')
+    #   for k in batch:
+    #     try:
+    #       print(f"{k}: {batch[k].shape}")
+    #     except:
+    #       print(f"{k}: {batch[k]}")
+    #   print('\n\n\n\n\n\n')
+      
+    # exit()
+    
     if 'attention_mask' in batch:
       attention_mask = batch['attention_mask']
     else:
@@ -875,7 +891,7 @@ class Diffusion(L.LightningModule):
         if first_step_lev is not None:
           all_first_step_levenshteins.append(first_step_lev)
         # Decode the samples to be re-tokenized by eval model
-        text_samples = self.tokenizer.batch_decode(samples)
+        text_samples = self.tokenizer.batch_decode(samples, skip_special_tokens=True)
         if self.config.eval.compute_generative_perplexity:
           self.compute_generative_perplexity(text_samples)
       
@@ -1654,7 +1670,40 @@ class Diffusion(L.LightningModule):
       elif True:
         curr_embed = self.indices_to_text_embeddings(x)
 
-      # Compute first step metrics (only on first iteration and if we have reference texts)
+      # Special handling for original_vae_decoder: single-step denoising with metrics
+      if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+        with torch.no_grad():
+          # Single forward pass for both sampling and metrics
+          log_p_x0 = self.forward(x, None, step_condition, curr_embed=curr_embed)
+          predicted_x0 = log_p_x0.argmax(dim=-1)
+          
+          # Compute first step metrics if we have reference texts
+          if i == 0 and reference_texts is not None and any(ref is not None for ref in reference_texts):
+            # Convert reference texts to tokens for comparison
+            reference_token_lists = []
+            for ref_text in reference_texts:
+              if ref_text is not None:
+                ref_tokens = self.tokenizer.encode(ref_text)
+                # Pad or truncate to match sequence length
+                if len(ref_tokens) < x.shape[1]:
+                  ref_tokens.extend([self.tokenizer.pad_token_id] * (x.shape[1] - len(ref_tokens)))
+                else:
+                  ref_tokens = ref_tokens[:x.shape[1]]
+                reference_token_lists.append(ref_tokens)
+              else:
+                reference_token_lists.append([self.tokenizer.pad_token_id] * x.shape[1])
+            
+            if reference_token_lists:
+              reference_tokens = torch.tensor(reference_token_lists, device=x.device, dtype=torch.long)
+              # Use text-based comparison for VAE decoder (more accurate for single-step generation)
+              first_step_accuracy, first_step_levenshtein = _compute_text_based_accuracy_and_levenshtein(
+                self.tokenizer, predicted_x0, reference_tokens)
+          
+          # Sample from the distribution
+          x = _sample_categorical(log_p_x0.exp())
+          break
+      
+      # Compute first step metrics for multi-step diffusion models (only on first iteration)
       if i == 0 and reference_texts is not None and any(ref is not None for ref in reference_texts):
         # Get predictions for first step
         sigma_t, _ = self.noise(t)
@@ -1683,12 +1732,6 @@ class Diffusion(L.LightningModule):
             reference_tokens = torch.tensor(reference_token_lists, device=x.device, dtype=torch.long)
             first_step_accuracy, first_step_levenshtein = _compute_first_step_accuracy_and_levenshtein(
               self.tokenizer, predicted_x0, reference_tokens)
-        
-      if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
-        with torch.no_grad():
-          log_p_x0 = self.forward(x, None, step_condition, curr_embed=curr_embed)
-          x = _sample_categorical(log_p_x0.exp())
-          break
 
       # Optionally update the condition embedding via EMA using a sampled x0
       if (i in update_steps) and (step_condition is not None):
@@ -1928,14 +1971,27 @@ class Diffusion(L.LightningModule):
 
   def _forward_pass_diffusion(self, x0):
     # condition can be extracted from x0
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      # Get condition (encoder latents) from x0
+      condition = self.indices_to_text_embeddings(x0)
+      
+      # Forward pass with return_last_hidden_state=True to get hidden states
+      with torch.cuda.amp.autocast(dtype=torch.float32):
+        model_output = self.backbone(
+          x0, None, condition, None
+        )
+      
+      # Compute cross-entropy loss
+      loss = F.cross_entropy(
+          model_output.reshape(-1, model_output.size(-1)),  # [Batch*seq_len, dim]
+          x0.reshape(-1),  # [Batch*seq_len]
+          reduction='none'
+      ).reshape(x0.shape)
+
+      return loss
+    
     condition = self.indices_to_text_embeddings(x0)
-
-    # Convert x0 tensor to a list of integers and dump it to a file
-    # x0_list = x0.cpu().numpy().tolist()
-    # with open("x0_dump.txt", "w") as f:
-    #     f.write(str(x0_list))
-    # 1 / 0
-
+    
     t = self._sample_t(x0.shape[0], x0.device)
     if self.T > 0:
       t = (t * self.T).to(torch.int)
@@ -1971,6 +2027,19 @@ class Diffusion(L.LightningModule):
     if self.parameterization == 'sedd':
       return dsigma[:, None] * self._score_entropy(
         model_output, sigma[:, None], xt, x0)
+      
+      
+    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      # Compute cross-entropy loss
+      # model_output: [Batch, seq_len, dim] - logits
+      # x0: [Batch, seq_len] - target indices
+      loss = F.cross_entropy(
+          model_output.reshape(-1, model_output.size(-1)),  # [Batch*seq_len, dim]
+          x0.reshape(-1),  # [Batch*seq_len]
+          reduction='none'
+      ).reshape(x0.shape)  # [Batch, seq_len]
+      return loss
+
     
     if self.T > 0:
       diffusion_loss = self._d3pm_loss(
@@ -2055,75 +2124,6 @@ class Diffusion(L.LightningModule):
     entropy[masked_indices] += pos_term - neg_term + const
     return entropy
 
-  # @torch.no_grad
-  # def sample_subs_guidance(
-  #   self, n_samples, stride_length, num_strides, dt=0.001):
-  #   ones = torch.ones(n_samples, dtype=self.dtype,
-  #                     device=self.device)
-
-  #   num_steps = int(1 / dt)
-  #   sampling_steps = 0
-  #   intermediate_tokens = []
-  #   target = None
-  #   for _ in range(num_strides + 1):
-  #     p_x0_cache = None
-  #     x = self._sample_prior(
-  #       n_samples,
-  #       self.config.model.length).to(self.device)
-  #     if target is not None:
-  #       x[:, : -stride_length] = target
-  #     for i in range(num_steps + 1):
-  #       p_x0_cache, x_next = self._ddpm_caching_update(
-  #         x=x, t=(1 - i * dt) * ones, dt=dt, p_x0=p_x0_cache)
-  #       if (not torch.allclose(x_next, x)
-  #           or self.time_conditioning):
-  #         p_x0_cache = None
-  #         sampling_steps += 1
-  #       x = x_next
-  #     x = self.forward(x, 0 * ones).argmax(dim=-1)
-  #     intermediate_tokens.append(
-  #       x[:, :stride_length].cpu().numpy())
-  #     target = x[:, stride_length:]
-    
-  #   intermediate_tokens.append(target.cpu().numpy())
-  #   intermediate_text_samples = []
-  #   sequence_lengths = ((
-  #     np.concatenate(intermediate_tokens, axis=1)[:, 1:]
-  #     == self.tokenizer.eos_token_id).cumsum(-1) == 0).sum(-1)
-  #   for i in range(2, len(intermediate_tokens) + 1):
-  #     intermediate_text_samples.append(
-  #       self.tokenizer.batch_decode(
-  #         np.concatenate(intermediate_tokens[:i], axis=1)))
-  #   return (sampling_steps, intermediate_text_samples,
-  #           sequence_lengths)
-
-  # def restore_model_and_semi_ar_sample(
-  #     self, stride_length, num_strides, dt=0.001):
-  #   """Generate samples from the model."""
-  #   # Lightning auto-casting is not working in this method for some reason
-  #   if self.ema:
-  #     self.ema.store(itertools.chain(
-  #       self.backbone.parameters(),
-  #       self.noise.parameters()))
-  #     self.ema.copy_to(itertools.chain(
-  #       self.backbone.parameters(),
-  #       self.noise.parameters()))
-  #   self.backbone.eval()
-  #   self.noise.eval()
-  #   (sampling_steps, samples,
-  #    sequence_lengths) = self.sample_subs_guidance(
-  #     n_samples=self.config.loader.eval_batch_size,
-  #     stride_length=stride_length,
-  #     num_strides=num_strides, 
-  #     dt=dt)
-  #   if self.ema:
-  #     self.ema.restore(itertools.chain(
-  #       self.backbone.parameters(),
-  #       self.noise.parameters()))
-  #   self.backbone.train()
-  #   self.noise.train()
-  #   return sampling_steps, samples, sequence_lengths
-
   def indices_to_text_embeddings(self, indices, attention_mask=None):
     """Convert batch of token indices to text embeddings.
     
@@ -2142,16 +2142,6 @@ class Diffusion(L.LightningModule):
     # Convert indices to text
     text_samples = self.tokenizer.batch_decode(indices, skip_special_tokens=True)
 
-    # Logging: write the decoded texts to a file
-    # log_dir = "./embedding_logs"
-    # os.makedirs(log_dir, exist_ok=True)
-    # text_log_path = os.path.join(log_dir, "texts.log")
-    # with open(text_log_path, "a", encoding="utf-8") as f:
-    #   for text, tokenized_text in zip(text_samples, indices):
-    #     f.write(text.replace("\n", "\\n") + "\n")
-    #     f.write(str(tokenized_text.tolist()) + "\n")
-    #     f.write("=" * 100 + "\n")
-
     # Get text embeddings
     text_embeddings = self.text_embedder(text_samples)
 
@@ -2161,18 +2151,6 @@ class Diffusion(L.LightningModule):
         and self.training):
       noise_std = float(self.config.text_embedder.noise)
       text_embeddings = text_embeddings + noise_std * torch.randn_like(text_embeddings)
-
-    # Logging: write the embeddings to a file
-    # emb_log_path = os.path.join(log_dir, "embeddings.log")
-    # with open(emb_log_path, "a", encoding="utf-8") as f:
-    #   if isinstance(text_embeddings, torch.Tensor):
-    #     emb_np = text_embeddings.detach().cpu().to(torch.float32).numpy()
-    #     for emb in emb_np:
-    #       f.write(" ".join([f"{x:.6f}" for x in emb.flatten()]) + "\n")
-    #   else:
-    #     # If not a tensor, just str() it
-    #     f.write(str(text_embeddings) + "\n")      
-    #   f.write("=" * 100 + "\n")
 
     # Ensure embeddings are on the same device as indices (safety check)
     if isinstance(text_embeddings, torch.Tensor):

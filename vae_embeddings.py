@@ -45,8 +45,8 @@ class VAEEncoder(nn.Module):
         # Токенизация без автоматических специальных токенов
         tokens = self.tokenizer(
             texts,
-            padding=False,
-            truncation=True,
+            padding=True,
+            truncation=False,
             add_special_tokens=False,
             return_tensors="pt"
         )

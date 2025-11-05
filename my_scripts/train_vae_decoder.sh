@@ -20,5 +20,6 @@ python main.py \
   data.wrap=False \
   vae_encoder.enabled=true \
   sub_conditioning.enabled=false \
-  experiment_name='original_vae_decoder'
+  experiment_name='original_vae_decoder-BERT-full-BCE-loss'
+  # experiment_name='original_vae_decoder-BERT'
   # +embedding_cache_dir=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/embedding_cache \

@@ -148,12 +148,6 @@ def load_compatible_weights(model, checkpoint_path):
 
 
 class Decoder(nn.Module):
-    
-    # config, 
-    # vocab_size: int, 
-    # cond_dim: int = None, 
-    # use_residual_modulation: bool = False, 
-    # use_weighted_sum: bool = True
     def __init__(self, 
                  config: DictConfig, 
                  vocab_size: int, 
@@ -230,7 +224,7 @@ class Decoder(nn.Module):
             raise ValueError(f"Checkpoint not found: {config.vae_encoder.latent_encoder.checkpoint}")
 
     # def forward(self, encoder_latents, masked_input_ids=None, return_last_hidden_state=False):
-    def forward(self, indices, sigma=None, condition=None, curr_embed=None):
+    def forward(self, indices, sigma=None, condition=None, curr_embed=None, return_last_hidden_state=False):
         """Forward pass for VAE decoder.
         
         Args:
@@ -238,8 +232,8 @@ class Decoder(nn.Module):
             sigma: Noise level (unused, kept for API compatibility)
             condition: Encoder latents - the only input actually used
             curr_embed: Current embeddings (unused, kept for API compatibility)
+            return_last_hidden_state: Whether to return hidden states for MSE loss
         """
-        return_last_hidden_state = False
         
         # Note: sigma and curr_embed are ignored by this decoder
         # Only condition (encoder latents) is used
