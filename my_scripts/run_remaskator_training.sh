@@ -18,6 +18,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,7
 # WANDB_API_KEY=e54e11c5a3971ce143232dc777a77b7734c1d25e \
 # WANDB_BASE_URL=https://api.wandb.ai \
 python remaskator_train.py \
+  vae_like_training=true \
   TYPE_OF_CONDITIONING='pos_embedding' \
   model=small \
   mode=train \

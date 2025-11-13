@@ -1,6 +1,7 @@
 defaults:
   - _self_
-  - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
+  - /callbacks: [checkpoint_every_n_steps, learning_rate_monitor]
+  # - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
   - /data: openwebtext-split
   - /model: small
   - /strategy: ddp
@@ -10,8 +11,11 @@ defaults:
   - /sub_conditioning: disabled
   - /vae_encoder: vae.yaml
 
+vae_like_training: False
+
 experiment_name: 'mdlm_training'
 tensorboard_logs: '/mnt/virtual_ai0001071-01239_SR006-nfs1/afedorov/logs'
+signle_step_training: False
 
 mode: train  # train / ppl_eval / sample_eval
 diffusion: absorbing_state

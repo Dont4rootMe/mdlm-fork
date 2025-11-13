@@ -1,5 +1,6 @@
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 python main.py \
+  vae_like_training=true \
   TYPE_OF_CONDITIONING='original_vae_decoder' \
   model=small \
   mode=train \
@@ -20,6 +21,4 @@ python main.py \
   data.wrap=False \
   vae_encoder.enabled=true \
   sub_conditioning.enabled=false \
-  experiment_name='original_vae_decoder-BERT-full-BCE-loss-normalized-embeddings'
-  # experiment_name='original_vae_decoder-BERT'
-  # +embedding_cache_dir=/mnt/virtual_ai0001071-01239_SR006-nfs2/afedorov/projects/mdlm-fork/embedding_cache \
+  experiment_name='only_normalization-BERT'

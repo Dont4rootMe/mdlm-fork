@@ -559,7 +559,7 @@ class Diffusion(L.LightningModule):
     self._move_text_embedder_to_device()
     
     # Load normalization statistics for VAE encoder if not already loaded
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder' and self.config.vae_encoder.enabled:
+    if self.config.vae_encoder.enabled and self.config.vae_encoder.enabled:
       if self.encodings_mean is None or self.encodings_std is None:
         try:
           vae_checkpoint_path = self.config.vae_encoder.latent_encoder.checkpoint
@@ -658,7 +658,7 @@ class Diffusion(L.LightningModule):
 
   def _process_sigma(self, sigma):
     if sigma is None:
-      assert self.parameterization == 'ar'
+      # assert self.parameterization == 'ar'
       return sigma
     if sigma.ndim > 1:
       sigma = sigma.squeeze(-1)
@@ -670,18 +670,13 @@ class Diffusion(L.LightningModule):
   def forward(self, x, sigma, condition, curr_embed=None):
     """Returns log score."""
 
-    # For original_vae_decoder, pass sigma=None and curr_embed=None
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
-      processed_sigma = None
-      processed_curr_embed = None
-    else:
-      processed_sigma = self._process_sigma(sigma)
-      processed_curr_embed = curr_embed
+    processed_sigma = self._process_sigma(sigma)
+    processed_curr_embed = curr_embed
     
     with torch.cuda.amp.autocast(dtype=torch.float32):
       logits = self.backbone(x, processed_sigma, condition, curr_embed=processed_curr_embed)
     
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+    if self.config.vae_like_training:
       return logits
     
     if self.parameterization == 'subs':
@@ -773,7 +768,7 @@ class Diffusion(L.LightningModule):
     batch_size = x0.shape[0]
     
     # Special handling for original_vae_decoder (single-step denoising from condition)
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+    if self.config.vae_like_training:
       # For original_vae_decoder: single-step denoising from fully masked input
       t = torch.ones(batch_size, device=x0.device) * 0.999999
       condition = self.indices_to_text_embeddings(x0)  # Condition from ground truth
@@ -781,6 +776,9 @@ class Diffusion(L.LightningModule):
       # Create fully masked input (what decoder receives)
       xt = torch.full_like(x0, self.mask_index)
       unet_conditioning = None
+      t = torch.ones(batch_size, device=x0.device) * 0.99
+      sigma, _ = self.noise(t)
+      unet_conditioning = sigma[:, None] * 0.0
       curr_embed = None
     else:
       # Standard multi-step diffusion: sample a high noise level for first step
@@ -806,9 +804,14 @@ class Diffusion(L.LightningModule):
     with torch.cuda.amp.autocast(dtype=torch.float32):
       logits = self.backbone(xt, unet_conditioning, condition, curr_embed=curr_embed)
     
+    if isinstance(logits, tuple):
+      logits, hidden_state_of_decoder = logits
+    else:
+      hidden_state_of_decoder = None
+    
     # Get predicted tokens (argmax)
     # For original_vae_decoder, use raw logits (no parameterization processing)
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+    if self.config.vae_like_training:
       # VAE decoder returns raw logits, just take argmax
       predicted_tokens = logits.argmax(dim=-1)
     else:
@@ -828,7 +831,7 @@ class Diffusion(L.LightningModule):
       predicted_tokens = logits.argmax(dim=-1)
     
     # Compute metrics
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+    if self.config.vae_like_training:
       # Use text-based comparison for VAE decoder (more accurate)
       accuracy, levenshtein = _compute_text_based_accuracy_and_levenshtein(
         self.tokenizer, predicted_tokens, x0)
@@ -1130,7 +1133,7 @@ class Diffusion(L.LightningModule):
     for each sample in the batch, the first lens[i] tokens are set to self.mask_index,
     the rest are set to self.tokenizer.pad_token_id.
     """
-    if lens is None or self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+    if lens is None or self.config.vae_like_training:
       return self.mask_index * torch.ones(
         *batch_dims, dtype=torch.int64)
     else:
@@ -1572,7 +1575,7 @@ class Diffusion(L.LightningModule):
     if num_steps is None:
       num_steps = self.config.sampling.steps
       
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+    if self.config.vae_like_training:
       num_steps = 1
 
     # sample condition based on config
@@ -1677,24 +1680,32 @@ class Diffusion(L.LightningModule):
       t = timesteps[i] * torch.ones(
         x.shape[0], 1, device=self.device)
       
-      if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
-        t = torch.ones(x.shape[0], 1, device=self.device) * 0.999999
+      if self.config.vae_like_training:
+        t = torch.ones(x.shape[0], 1, device=self.device) * 0
         
       # Use condition only while i < cond_until_step
       step_condition = condition if (condition is not None and i < cond_until_step) else None
 
       # Update curr_embed for sub conditioning at each step
       # For original_vae_decoder, curr_embed is not used (decoder ignores it)
-      if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      if self.config.vae_like_training:
         curr_embed = None
       elif True:
         curr_embed = self.indices_to_text_embeddings(x)
 
       # Special handling for original_vae_decoder: single-step denoising with metrics
-      if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+      if self.config.vae_like_training:
         with torch.no_grad():
           # Single forward pass for both sampling and metrics
-          log_p_x0 = self.forward(x, None, step_condition, curr_embed=curr_embed)
+          sigma_t, _ = self.noise(t)
+          if sigma_t.ndim > 1:
+            sigma_t = sigma_t.squeeze(-1)
+          unet_conditioning = sigma_t[:, None] * 0.0
+          log_p_x0 = self.forward(x, unet_conditioning, step_condition, curr_embed=curr_embed)
+          if isinstance(log_p_x0, tuple):
+            log_p_x0, hidden_state_of_decoder = log_p_x0
+          else:
+            hidden_state_of_decoder = None
           predicted_x0 = log_p_x0.argmax(dim=-1)
           
           # Compute first step metrics if we have reference texts
@@ -1792,9 +1803,8 @@ class Diffusion(L.LightningModule):
       # Record state after update at this timestep t
       _record_state(x, t)
 
-    if self.config.sampling.noise_removal and not self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
-      t = timesteps[-1] * torch.ones(x.shape[0], 1,
-                                     device=self.device)
+    if self.config.sampling.noise_removal and not self.config.vae_like_training:
+      t = timesteps[-1] * torch.ones(x.shape[0], 1, device=self.device)
       final_condition = condition if (condition is not None and num_steps <= cond_until_step) else None
       if self.sampler == 'analytic':
         x = self._denoiser_update(x, t, final_condition)
@@ -1937,7 +1947,7 @@ class Diffusion(L.LightningModule):
       idx = perm[:half_n]
       _eps_t[idx] = 0.999
     
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+    if self.config.vae_like_training:
       _eps_t = torch.ones(n, device=device) * 0.999999
     
     if self.antithetic_sampling:
@@ -1991,7 +2001,7 @@ class Diffusion(L.LightningModule):
 
   def _forward_pass_diffusion(self, x0):
     # condition can be extracted from x0
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+    if self.config.vae_like_training:
       # Get condition (encoder latents) from x0
       condition = self.indices_to_text_embeddings(x0)
       
@@ -2000,10 +2010,12 @@ class Diffusion(L.LightningModule):
       if bert_embeddings is not None:
         bert_embeddings = self.normalize_encodings(bert_embeddings)
       
+      times = self._sample_t(x0.shape[0], x0.device) * 0.0
+      
       # Forward pass with return_last_hidden_state=True to get hidden states
       with torch.cuda.amp.autocast(dtype=torch.float32):
         model_output, hidden_state_of_decoder = self.backbone(
-          x0, None, condition, None, return_last_hidden_state=True
+          x0, times, condition, None, return_last_hidden_state=True
         )
       
       # Compute cross-entropy loss
@@ -2014,7 +2026,7 @@ class Diffusion(L.LightningModule):
       ).reshape(x0.shape)
       
       # Compute MSE loss between decoder hidden states and BERT embeddings
-      if bert_embeddings is not None:
+      if bert_embeddings is not None and hidden_state_of_decoder is not None:
         # MSE loss per token
         mse_loss = F.mse_loss(
           hidden_state_of_decoder,  # [Batch, seq_len, hidden_dim]
@@ -2054,12 +2066,7 @@ class Diffusion(L.LightningModule):
     
     # For original_vae_decoder, curr_embed is not used (decoder ignores it)
     # and computing embeddings from noisy/masked tokens is not meaningful
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
-      curr_embed = None
-    elif True:
-      curr_embed = self.indices_to_text_embeddings(xt)
-    else:
-      curr_embed = None
+    curr_embed = self.indices_to_text_embeddings(xt)
     
     model_output = self.forward(xt, unet_conditioning, condition, curr_embed=curr_embed)
     utils.print_nans(model_output, 'model_output')
@@ -2069,7 +2076,7 @@ class Diffusion(L.LightningModule):
         model_output, sigma[:, None], xt, x0)
       
       
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder':
+    if self.config.vae_like_training:
       # Compute cross-entropy loss
       # model_output: [Batch, seq_len, dim] - logits
       # x0: [Batch, seq_len] - target indices
@@ -2223,7 +2230,7 @@ class Diffusion(L.LightningModule):
       return None
 
     # For VAE encoder during training, use encoder directly to get latents
-    if self.config.TYPE_OF_CONDITIONING == 'original_vae_decoder' and self.config.vae_encoder.enabled:
+    if self.config.vae_like_training and self.config.vae_encoder.enabled:
       # Get BERT embeddings
       bert_embeddings = self.get_bert_embeddings(indices, attention_mask)
       if bert_embeddings is None:

@@ -237,9 +237,34 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(qkv, cos, sin):
-  cos = cos[0,:,0,0,:cos.shape[-1]//2]
-  sin = sin[0,:,0,0,:sin.shape[-1]//2]
-  return flash_attn.layers.rotary.apply_rotary_emb_qkv_(qkv, cos, sin)
+  """
+  Apply rotary position embeddings to Q and K in qkv tensor.
+  qkv shape: (batch, seqlen, 3, nheads, headdim)
+  cos/sin shape: (1, seqlen, 1, 1, headdim)
+  """
+  cos = cos[0, :, 0, 0, :cos.shape[-1]//2]  # (seqlen, headdim//2)
+  sin = sin[0, :, 0, 0, :sin.shape[-1]//2]  # (seqlen, headdim//2)
+  
+  # Expand cos and sin to match qkv dimensions
+  # cos/sin: (seqlen, headdim//2) -> (1, seqlen, 1, headdim//2)
+  cos = cos.unsqueeze(0).unsqueeze(2)
+  sin = sin.unsqueeze(0).unsqueeze(2)
+  
+  # Duplicate to match full headdim: (1, seqlen, 1, headdim)
+  cos = torch.cat([cos, cos], dim=-1)
+  sin = torch.cat([sin, sin], dim=-1)
+  
+  # Apply rotary embeddings to Q and K (indices 0 and 1), leave V (index 2) unchanged
+  q, k, v = qkv[:, :, 0], qkv[:, :, 1], qkv[:, :, 2]
+  
+  # Apply rotation: q_rot = q * cos + rotate_half(q) * sin
+  q_rot = q * cos + rotate_half(q) * sin
+  k_rot = k * cos + rotate_half(k) * sin
+  
+  # Stack back together
+  qkv = torch.stack([q_rot, k_rot, v], dim=2)
+  
+  return qkv
 
 
 # function overload
@@ -547,4 +572,4 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
       x = self.output_layer(x, c)
 
-    return x
+    return x, None
